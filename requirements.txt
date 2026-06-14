@@ -1,0 +1,60 @@
+# Platform-specific dependencies
+comtypes==1.4.6; sys_platform == "win32"
+pycaw==20240210; sys_platform == "win32"
+pywin32>=307; sys_platform == "win32"
+windows_bluetooth_watcher; sys_platform == "win32"
+wmi; sys_platform == "win32"
+win11toast; sys_platform == "win32"
+win10toast; sys_platform == "win32"
+
+# Binary / audio / GUI dependencies
+cryptography==44.0.1
+numpy>=1.26.4
+sounddevice>=0.4.4
+pygame==2.6.1
+PyQt5==5.15.11
+opencv-python-headless==4.11.0.86
+soxr==0.5.0.post1
+psutil==7.0.0
+pillow==11.3.0
+webrtcvad-wheels==2.0.14
+sherpa-onnx>=1.12.26
+pendulum==3.1.0
+
+# Network / protocol / AI
+openai==1.86.0
+aiohttp==3.12.13
+websockets==11.0.3
+paho-mqtt==2.1.0
+requests==2.32.3
+
+# Application utilities
+opuslib==3.0.1
+pynput==1.8.1
+pyperclip==1.9.0
+pypinyin==0.53.0
+colorlog==6.9.0
+qasync==0.27.1
+py-machineid==0.8.0
+mutagen==1.47.0
+beautifulsoup4==4.12.3
+brotli==1.1.0
+python-dateutil==2.9.0.post0
+lunar_python==1.4.4
+rich==14.1.0
+packaging==25.0
+screen_brightness_control
+keyboard
+mss
+pyautogui
+typing-extensions
+
+# Packaging
+pyinstaller==6.15.0
+
+# Optional demo/script dependencies
+# scripts/webrtc_aec_demo.py uses these packages. They are optional and may
+# require extra system setup, especially PyAudio on Windows.
+# pyaudio
+# soundfile
+# scipy

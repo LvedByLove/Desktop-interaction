@@ -1,0 +1,80 @@
+{
+  "entry": "main.py",
+  "name": "小智",
+  "display_name": "小智",
+  "version": "1.1.9",
+  "icon": "assets/icon.png",
+  "pyinstaller": {
+    "onefile": false,
+    "windowed": true,
+    "add_data": [
+      "models:models",
+      "scripts:scripts",
+      "src:src",
+      "libs:libs",
+      "assets:assets"
+    ],
+    "clean": true,
+    "noconfirm": true
+  },
+  "platforms": {
+    "macos": {
+      "bundle_identifier": "com.company.小智",
+      "minimum_system_version": "10.13",
+      "category": "public.app-category.productivity",
+      "microphone_usage_description": "此应用需要访问麦克风以实现录音功能",
+      "speech_recognition_usage_description": "此应用需要使用语音识别功能以理解语音指令",
+      "camera_usage_description": "此应用需要访问摄像头以实现拍照或视频功能",
+      "copyright": "© 2024 Company. All rights reserved.",
+      "dmg": {
+        "volname": "小智 安装器",
+        "window_size": [
+          600,
+          450
+        ],
+        "icon_size": 100,
+        "format": "UDZO"
+      }
+    },
+    "windows": {
+      "inno_setup": {
+        "create_desktop_icon": true,
+        "create_start_menu_icon": true,
+        "allow_run_after_install": true,
+        "languages": [
+          "chinesesimplified",
+          "english"
+        ]
+      },
+      "pyinstaller": {
+        "contents_directory": "."
+      }
+    },
+    "linux": {
+      "formats": [
+        "rpm",
+        "appimage",
+        "deb"
+      ],
+      "deb": {
+        "package": "小智",
+        "section": "utils",
+        "priority": "optional",
+        "desktop_entry": true,
+        "categories": [
+          "Utility"
+        ]
+      },
+      "rpm": {
+        "name": "小智",
+        "group": "Applications/Utilities"
+      },
+      "appimage": {
+        "desktop_entry": true,
+        "categories": [
+          "Utility"
+        ]
+      }
+    }
+  }
+}
