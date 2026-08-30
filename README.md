@@ -1,4 +1,4 @@
-# Desktop interaction
+<img width="233" height="54" alt="image" src="https://github.com/user-attachments/assets/e9e28365-ee90-4a99-a098-fbfb791d620f" /># Desktop interaction
 
 > 基于 [py-xiaozhi](https://github.com/huangjunsen0406/py-xiaozhi) 的桌面交互增强版小智语音客户端。
 
@@ -35,7 +35,7 @@ Desktop interaction 是一个使用 Python 实现的桌面端小智语音客户�
 相比原版，本项目主要做了以下方向的修改。
 
 ### 1. 桌面悬浮交互界面优化
-
+![桌面悬浮交互界面](assets/image/211614.png)
 - 重做桌面端悬浮胶囊界面；
 - 使用类似“灵动岛”的黑色胶囊风格；
 - 支持悬浮展开、自动隐藏、顶部贴边隐藏；
