@@ -1,4 +1,4 @@
-<img width="233" height="54" alt="image" src="https://github.com/user-attachments/assets/e9e28365-ee90-4a99-a098-fbfb791d620f" /># Desktop interaction
+# Desktop interaction
 
 > 基于 [py-xiaozhi](https://github.com/huangjunsen0406/py-xiaozhi) 的桌面交互增强版小智语音客户端。
 
@@ -24,9 +24,9 @@ Desktop interaction 是一个使用 Python 实现的桌面端小智语音客户�
 
 - 原项目：[`py-xiaozhi`](https://github.com/huangjunsen0406/py-xiaozhi)
 - 原作者：[`huangjunsen0406`](https://github.com/huangjunsen0406)
-- 原项目许可证：MIT License和LICENSE.txt
+- 原项目许可证：MIT License
 - 上游相关项目：[`xiaozhi-esp32`](https://github.com/78/xiaozhi-esp32)
-- Neko云音乐：[`NekoMusicDocs`](https://github.com/FantasyNetworkCN/NekoMusicDocs)
+- 音乐接口文档参考：[`NekoMusicDocs`](https://github.com/FantasyNetworkCN/NekoMusicDocs)
 
 感谢原作者和社区提供的基础项目。没有原项目的基础工作，本项目无法完成。
 
@@ -35,6 +35,7 @@ Desktop interaction 是一个使用 Python 实现的桌面端小智语音客户�
 相比原版，本项目主要做了以下方向的修改。
 
 ### 1. 桌面悬浮交互界面优化
+![桌面悬浮交互界面](assets/image/212746.png)
 - 重做桌面端悬浮胶囊界面；
 - 使用类似“灵动岛”的黑色胶囊风格；
 - 支持悬浮展开、自动隐藏、顶部贴边隐藏；
@@ -77,7 +78,6 @@ Desktop interaction 是一个使用 Python 实现的桌面端小智语音客户�
 - 歌词界面可以点击折叠；
 - 折叠后只保留一个小型跳动动画，表示音乐仍在播放；
 - 再次点击可以恢复完整歌词；
-- 当前台应用全屏时，可自动折叠歌词界面，减少遮挡。
 
 ### 5. TTS 与音乐共存优化
 
