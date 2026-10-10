@@ -111,7 +111,7 @@ Desktop interaction 是一个使用 Python 实现的桌面端小智语音客户�
 
 - Python 3.9+
 - Windows 10+/macOS 10.15+/Linux
-
+注意：更偏向于Windows电脑
 ### 安装依赖
 
 ```bash
