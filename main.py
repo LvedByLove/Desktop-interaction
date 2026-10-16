@@ -156,6 +156,11 @@ async def start_app(mode: str, protocol: str, skip_activation: bool) -> int:
     """
     logger.info("启动小智AI客户端")
 
+    # 内存采样诊断（默认关闭，仅当 XIAOZHI_MEM_PROFILE=1 时启用）
+    from src.utils import memory_profiler
+
+    memory_profiler.start()
+
     # 处理激活流程
     if not skip_activation:
         activation_success = await handle_activation(mode)
@@ -216,15 +221,38 @@ if __name__ == "__main__":
             pass
 
         if args.mode == "gui":
+            # Windows：设置显式的 AppUserModelID，使任务栏正确分组并使用程序图标
+            # （未设置时 Win11 会把 pythonw/安装包当作默认图标分组）
+            if sys.platform == "win32":
+                try:
+                    import ctypes
+
+                    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                        "xiaozhi.desktop-interaction.client"
+                    )
+                except Exception as e:
+                    logger.debug(f"设置 AppUserModelID 失败: {e}")
+
             # 在GUI模式下，由main统一创建 QApplication 与 qasync 事件循环
             try:
                 import qasync
+                from PyQt5.QtGui import QIcon
                 from PyQt5.QtWidgets import QApplication
             except ImportError as e:
                 logger.error(f"GUI模式需要qasync和PyQt5库: {e}")
                 sys.exit(1)
 
             qt_app = QApplication.instance() or QApplication(sys.argv)
+
+            # 设置应用级窗口图标（任务栏/窗口标题栏），资源随包打包
+            try:
+                from src.utils import resource_finder
+
+                icon_path = resource_finder.find_file("assets/image/Redstone.png")
+                if icon_path:
+                    qt_app.setWindowIcon(QIcon(str(icon_path)))
+            except Exception as e:
+                logger.debug(f"设置应用图标失败: {e}")
 
             loop = qasync.QEventLoop(qt_app)
             asyncio.set_event_loop(loop)
