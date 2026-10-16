@@ -33,8 +33,10 @@ class McpPlugin(Plugin):
             self._server.set_send_callback(_send)
             # 注册通用工具（包含 calendar 工具）。提醒服务的运行改由 CalendarPlugin 管理
             self._server.add_common_tools()
-        except Exception:
-            pass
+        except Exception as e:
+            # 不要把异常吞掉：之前这里的静默 pass 让打包版缺依赖时整套工具静默消失，
+            # 日志里毫无痕迹，排查花了很多时间。
+            logger.exception(f"[McpPlugin] 注册通用工具失败，工具列表可能不完整: {e}")
 
     async def on_incoming_json(self, message: Any) -> None:
         if not isinstance(message, dict):

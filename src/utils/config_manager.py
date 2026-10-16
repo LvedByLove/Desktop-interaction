@@ -18,6 +18,7 @@ class ConfigManager:
         "SYSTEM_OPTIONS": {
             "CLIENT_ID": None,
             "DEVICE_ID": None,
+            "AUTOSTART": False,
             "NETWORK": {
                 "OTA_VERSION_URL": "https://api.tenclass.net/xiaozhi/ota/",
                 "WEBSOCKET_URL": None,
@@ -75,6 +76,7 @@ class ConfigManager:
             "input_device_name": None,
             "output_device_id": None,
             "output_device_name": None,
+            "output_device_pinned": False,
             "input_sample_rate": None,
             "output_sample_rate": None,
             "input_channels": None,

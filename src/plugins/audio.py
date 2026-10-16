@@ -47,7 +47,7 @@ class AudioPlugin(Plugin):
             self.codec = None
 
     async def on_device_state_changed(self, state):
-        """设备状态变化时清空音频队列.
+        """设备状态变化时清空音频队列，并按需释放/恢复输入流.
 
         特别处理：进入 LISTENING 状态时，等待音频硬件输出完全停止， 避免 TTS 尾音被麦克风捕获导致误触发。
         """
@@ -56,8 +56,9 @@ class AudioPlugin(Plugin):
 
         from src.constants.constants import DeviceState
 
-        # 如果进入监听状态，清空队列并等待硬件输出完全停止
+        # 如果进入监听状态，确保输入流运行，清空队列并等待硬件输出完全停止
         if state == DeviceState.LISTENING:
+            await self.codec.start_input_stream()
             # 设置静默期标志，阻止麦克风音频发送
             self._in_silence_period = True
             try:
@@ -66,6 +67,21 @@ class AudioPlugin(Plugin):
             finally:
                 # 清空和等待完成后，解除静默期
                 self._in_silence_period = False
+        elif state == DeviceState.IDLE:
+            # 待命状态下，若未启用唤醒词则释放输入流，避免持续占用麦克风
+            if not self._wake_word_enabled():
+                await self.codec.stop_input_stream()
+
+    def _wake_word_enabled(self) -> bool:
+        """判断唤醒词检测是否启用（启用时需持续占用输入流以监听唤醒词）。"""
+        try:
+            plugin = self.app.plugins.get_plugin("wake_word") if self.app else None
+            if not plugin:
+                return False
+            detector = getattr(plugin, "detector", None)
+            return bool(detector is not None and getattr(detector, "enabled", False))
+        except Exception:
+            return False
 
     async def on_incoming_json(self, message: Any) -> None:
         """处理 TTS 事件，控制音乐播放.

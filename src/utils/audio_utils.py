@@ -246,3 +246,196 @@ def select_audio_device(
             return pack(i)
 
     return None
+
+
+# 惰性缓存：Windows Core Audio（COM）所需的 ctypes 类型与原型，仅创建一次。
+# 之前这些定义写在 get_windows_default_output_name 内部，而该函数被
+# _monitor_output_device 每 1.5s 轮询调用一次，导致每次调用都新建一批
+# ctypes.Structure 类与 WINFUNCTYPE 原型并被 ctypes 内部缓存持有、无法回收，
+# 长时间运行内存持续增长（泄漏）。提升到模块级并缓存后，仅定义一次。
+_win_com = None
+
+
+def _get_win_com():
+    global _win_com
+    if _win_com is not None:
+        return _win_com
+
+    import ctypes
+    from ctypes import POINTER, byref, cast, c_void_p, c_ulong, c_uint32
+
+    class GUID(ctypes.Structure):
+        _fields_ = [
+            ("Data1", c_uint32),
+            ("Data2", ctypes.c_uint16),
+            ("Data3", ctypes.c_uint16),
+            ("Data4", ctypes.c_ubyte * 8),
+        ]
+
+    class PROPERTYKEY(ctypes.Structure):
+        _fields_ = [("fmtid", GUID), ("pid", c_uint32)]
+
+    class _PROPVARIANT_UNION(ctypes.Union):
+        _fields_ = [
+            ("pwszVal", ctypes.c_wchar_p),
+            ("bytes", ctypes.c_ubyte * 8),
+        ]
+
+    class PROPVARIANT(ctypes.Structure):
+        _anonymous_ = ("u",)
+        _fields_ = [
+            ("vt", ctypes.c_uint16),
+            ("wReserved1", ctypes.c_uint16),
+            ("wReserved2", ctypes.c_uint16),
+            ("wReserved3", ctypes.c_uint16),
+            ("u", _PROPVARIANT_UNION),
+        ]
+
+    def _guid(d1, d2, d3, d4):
+        g = GUID()
+        g.Data1 = d1
+        g.Data2 = d2
+        g.Data3 = d3
+        g.Data4 = (ctypes.c_ubyte * 8)(*d4)
+        return g
+
+    CLSID_MMDeviceEnumerator = _guid(
+        0xBCDE0395, 0xE52F, 0x467C, (0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E)
+    )
+    IID_IMMDeviceEnumerator = _guid(
+        0xA95664D2, 0x9614, 0x4F35, (0xA7, 0x46, 0xDE, 0x8D, 0xB6, 0x36, 0x17, 0xE6)
+    )
+    # PKEY_Device_FriendlyName
+    PKEY_FRIENDLY_NAME = PROPERTYKEY()
+    PKEY_FRIENDLY_NAME.fmtid = _guid(
+        0xA45C254E, 0xDF1C, 0x4EFD, (0x80, 0x20, 0x67, 0xD1, 0x46, 0xA8, 0x50, 0xE0)
+    )
+    PKEY_FRIENDLY_NAME.pid = 14
+
+    CLSCTX_ALL = 23
+    VT_LPWSTR = 31
+
+    # 使用私有 ole32 实例，避免修改 ctypes.windll 共享单例的 argtypes
+    ole32 = ctypes.WinDLL("ole32")
+    ole32.CoCreateInstance.argtypes = [
+        POINTER(GUID), c_void_p, c_uint32, POINTER(GUID), POINTER(c_void_p)
+    ]
+    ole32.CoCreateInstance.restype = ctypes.c_long
+    ole32.CoInitializeEx.argtypes = [c_void_p, c_uint32]
+    ole32.CoInitializeEx.restype = ctypes.c_long
+    ole32.PropVariantClear.argtypes = [POINTER(PROPVARIANT)]
+    ole32.PropVariantClear.restype = ctypes.c_long
+
+    def _call_vtbl(ptr, index, proto):
+        vtbl = cast(ptr, POINTER(POINTER(c_void_p))).contents
+        return proto(vtbl[index])
+
+    proto_release = ctypes.WINFUNCTYPE(c_ulong, c_void_p)
+    proto_enum = ctypes.WINFUNCTYPE(
+        ctypes.c_long, c_void_p, ctypes.c_int, ctypes.c_int, POINTER(c_void_p)
+    )
+    proto_open = ctypes.WINFUNCTYPE(
+        ctypes.c_long, c_void_p, c_uint32, POINTER(c_void_p)
+    )
+    proto_get = ctypes.WINFUNCTYPE(
+        ctypes.c_long, c_void_p, POINTER(PROPERTYKEY), POINTER(PROPVARIANT)
+    )
+
+    def _release(ptr):
+        if ptr and ptr.value:
+            try:
+                _call_vtbl(ptr, 2, proto_release)(ptr)
+            except Exception:
+                pass
+
+    _win_com = {
+        "ole32": ole32,
+        "byref": byref,
+        "c_void_p": c_void_p,
+        "PROPVARIANT": PROPVARIANT,
+        "CLSID_MMDeviceEnumerator": CLSID_MMDeviceEnumerator,
+        "IID_IMMDeviceEnumerator": IID_IMMDeviceEnumerator,
+        "PKEY_FRIENDLY_NAME": PKEY_FRIENDLY_NAME,
+        "CLSCTX_ALL": CLSCTX_ALL,
+        "VT_LPWSTR": VT_LPWSTR,
+        "proto_enum": proto_enum,
+        "proto_open": proto_open,
+        "proto_get": proto_get,
+        "_call_vtbl": _call_vtbl,
+        "_release": _release,
+    }
+    return _win_com
+
+
+def get_windows_default_output_name() -> Optional[str]:
+    """实时查询 Windows 当前默认输出（渲染）设备的友好名称.
+
+    PortAudio 在初始化时会缓存默认设备索引，Windows 运行时切换默认输出设备
+    （例如插入耳机后系统自动切换）后，sd.query_devices(kind='output') 不会更新。
+    此函数通过 Core Audio 的 IMMDeviceEnumerator::GetDefaultAudioEndpoint
+    直接向系统读取当前默认渲染端点，用于检测运行时切换并跟随路由。
+    """
+    if platform.system().lower() != "windows":
+        return None
+
+    com = _get_win_com()
+    byref = com["byref"]
+    c_void_p = com["c_void_p"]
+    ole32 = com["ole32"]
+
+    # COM 需在线程上初始化（MMDevice API 在任意 apartment 下均可用）。
+    # 只初始化一次并保持（不反初始化），避免反复创建/销毁 COM 套间。
+    try:
+        ole32.CoInitializeEx(None, 0)  # COINIT_MULTITHREADED
+    except Exception:
+        pass
+
+    name = None
+    p_device = c_void_p()
+    p_store = c_void_p()
+    device = c_void_p()
+    try:
+        hr = ole32.CoCreateInstance(
+            byref(com["CLSID_MMDeviceEnumerator"]), None, com["CLSCTX_ALL"],
+            byref(com["IID_IMMDeviceEnumerator"]), byref(p_device),
+        )
+        if hr != 0 or not p_device.value:
+            return None
+
+        # IMMDeviceEnumerator::GetDefaultAudioEndpoint(eRender=0, eConsole=0)
+        hr = com["_call_vtbl"](p_device, 4, com["proto_enum"])(
+            p_device, 0, 0, byref(device)
+        )
+        if hr != 0 or not device.value:
+            return None
+
+        # IMMDevice::OpenPropertyStore(STGM_READ=0, &IPropertyStore)
+        hr = com["_call_vtbl"](device, 4, com["proto_open"])(device, 0, byref(p_store))
+        if hr != 0 or not p_store.value:
+            return None
+
+        # IPropertyStore::GetValue(&key, &PROPVARIANT)
+        pv = com["PROPVARIANT"]()
+        hr = com["_call_vtbl"](p_store, 5, com["proto_get"])(
+            p_store, byref(com["PKEY_FRIENDLY_NAME"]), byref(pv)
+        )
+        if hr == 0 and pv.vt == com["VT_LPWSTR"] and pv.pwszVal:
+            name = pv.pwszVal
+        # 释放 PROPVARIANT 持有的字符串（CoTaskMemAlloc 分配），避免每次轮询泄漏
+        try:
+            ole32.PropVariantClear(byref(pv))
+        except Exception:
+            pass
+    except Exception:
+        name = None
+    finally:
+        com["_release"](p_store)
+        com["_release"](device)
+        com["_release"](p_device)
+
+    # 注意：这里故意不调用 CoUninitialize()。
+    # 该函数被 _monitor_output_device 每 1.5s 轮询一次，且始终运行在同一个
+    # 事件循环线程上。若每次 CoInitializeEx(S_OK) 后立即 CoUninitialize，会在
+    # 该线程上反复创建/销毁 COM 套间（apartment），长时间运行可能加剧卡顿；
+    # 保持 COM 在该线程上持续初始化（后续调用返回 S_FALSE）即可消除此抖动。
+    return name
