@@ -160,7 +160,21 @@
          </item>
         </widget>
        </item>
-       <item row="9" column="0" colspan="2">
+       <item row="9" column="0">
+        <widget class="QLabel" name="label_autostart">
+         <property name="text">
+          <string>开机自启动:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="9" column="1">
+        <widget class="QCheckBox" name="autostart_check">
+         <property name="text">
+          <string>启用</string>
+         </property>
+        </widget>
+       </item>
+       <item row="10" column="0" colspan="2">
         <widget class="QGroupBox" name="mqtt_group">
          <property name="title">
           <string>MQTT配置</string>

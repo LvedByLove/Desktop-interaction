@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QDialog, QMessageBox, QPushButton, QTabWidget
+from PyQt5.QtWidgets import QApplication, QDialog, QMessageBox, QPushButton, QTabWidget
 
 from src.utils.config_manager import ConfigManager
 from src.utils.logging_config import get_logger
@@ -56,6 +56,8 @@ class SettingsWindow(QDialog):
                 | Qt.WindowMaximizeButtonHint
                 | Qt.WindowCloseButtonHint
             )
+            # 确保不保持在最上层（主窗口带 WindowStaysOnTopHint，避免被连带置顶）
+            self.setWindowFlag(Qt.WindowStaysOnTopHint, False)
             self.setAttribute(Qt.WA_StyledBackground, True)
             self._set_window_icon()
 
@@ -67,6 +69,7 @@ class SettingsWindow(QDialog):
 
             apply_settings_dialog_style(self)
             self.resize(720, 620)
+            self._center_on_screen()
 
         except Exception as e:
             self.logger.error(f"设置UI失败: {e}", exc_info=True)
@@ -81,6 +84,20 @@ class SettingsWindow(QDialog):
             self.setWindowIcon(QIcon(str(icon_path)))
         else:
             self.logger.warning("未找到设置窗口图标资源: assets/image/Redstone.png")
+
+    def _center_on_screen(self):
+        """
+        将窗口居中到屏幕正中间（首次打开时调用）.
+        """
+        try:
+            screen = QApplication.primaryScreen()
+            if screen:
+                rect = screen.availableGeometry()
+                x = rect.x() + (rect.width() - self.width()) // 2
+                y = rect.y() + (rect.height() - self.height()) // 2
+                self.move(x, y)
+        except Exception as e:
+            self.logger.debug(f"居中窗口失败: {e}")
 
     def _add_component_tabs(self):
         """
@@ -230,6 +247,10 @@ class SettingsWindow(QDialog):
             for config_path, value in all_config_data.items():
                 self.config_manager.update_config(config_path, value)
 
+            # 应用开机自启动设置（写入/移除系统注册表）
+            if self.system_options_tab:
+                self.system_options_tab.apply_autostart()
+
             self.logger.info("配置保存成功")
             return True
 
@@ -310,9 +331,10 @@ class SettingsWindow(QDialog):
             # 获取当前执行的程序路径和参数
             python = sys.executable
             script = sys.argv[0]
+            script_path = Path(script).resolve()
             args = []
             skip_next = False
-            executable_paths = {Path(sys.executable).resolve(), Path(script).resolve()}
+            executable_paths = {Path(sys.executable).resolve(), script_path}
             for arg in sys.argv[1:]:
                 if skip_next:
                     skip_next = False
@@ -329,18 +351,61 @@ class SettingsWindow(QDialog):
             restart_args = ["--wait-parent-pid", str(os.getpid()), *args]
 
             # 启动新实例（使用subprocess避免路径空格问题）
-            if getattr(sys, "frozen", False):
-                # 打包环境
-                command = [sys.executable, *restart_args]
+            # 打包环境判定：
+            #   - PyInstaller 会设置 sys.frozen，argv[0] 就是程序 exe；
+            #   - Nuitka 不设置 sys.frozen（那是 PyInstaller 的做法），它的标志是
+            #     编译后的模块里有 __compiled__（在 globals() 里，不在 sys.modules）；
+            #   - 最后再兜一层“argv[0] 本身就是可执行文件”，不依赖任何框架内部行为。
+            is_frozen = (
+                getattr(sys, "frozen", False)
+                or "__compiled__" in globals()
+                or (script_path.suffix.lower() == ".exe" and script_path.exists())
+            )
+
+            if is_frozen:
+                # 打包环境：直接用程序自身的 exe 启动。
+                # 不能用 sys.executable——Nuitka 产物里它指向 <安装目录>\python.exe，
+                # 而该文件并不存在，实测会抛 FileNotFoundError: [WinError 2]。
+                launcher = script_path if script_path.exists() else Path(sys.executable)
+                command = [str(launcher), *restart_args]
+                cwd = str(launcher.parent)
             else:
-                # 开发环境
+                # 开发环境：python 解释器 + 脚本
                 command = [python, script, *restart_args]
+                cwd = None
 
             self.logger.info(f"重启命令: {' '.join(command)}")
-            subprocess.Popen(command)
+            subprocess.Popen(command, cwd=cwd)
 
-            # 关闭当前应用
-            QApplication.quit()
+            # 关闭当前应用：走优雅关闭路径，不能直接 QApplication.quit()——
+            # 那会提前停掉 qasync 循环，在 Application.run() 收尾之前触发
+            # "Event loop stopped before Future completed"。
+            import asyncio
+
+            from PyQt5.QtCore import QTimer
+
+            from src.application import Application
+
+            app = Application.get_instance()
+            if not app:
+                QApplication.quit()
+                return
+
+            loop = asyncio.get_event_loop()
+            if not loop.is_running():
+                QApplication.quit()
+                return
+
+            shutdown_task = asyncio.create_task(app.shutdown())
+
+            def force_quit():
+                if not shutdown_task.done():
+                    self.logger.warning("重启关闭超时，强制退出")
+                    shutdown_task.cancel()
+                QApplication.quit()
+
+            # 新实例等待旧进程最多10秒，兜底超时需短于该值
+            QTimer.singleShot(3000, force_quit)
 
         except Exception as e:
             self.logger.error(f"直接重启失败: {e}", exc_info=True)

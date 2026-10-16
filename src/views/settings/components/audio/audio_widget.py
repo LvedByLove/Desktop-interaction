@@ -166,7 +166,9 @@ class AudioWidget(QWidget):
                 else:
                     self.ui_controls["output_info_label"].setText("设备信息获取失败")
             else:
-                self.ui_controls["output_info_label"].setText("未选择设备")
+                self.ui_controls["output_info_label"].setText(
+                    "跟随系统默认输出（插入耳机等设备后自动切换）"
+                )
 
         except Exception as e:
             self.logger.error(f"更新设备信息失败: {e}", exc_info=True)
@@ -249,6 +251,10 @@ class AudioWidget(QWidget):
 
             # 清空并重新填充输出设备
             self.ui_controls["output_device_combo"].clear()
+            # 合成选项：跟随系统默认输出（data 为 None）
+            self.ui_controls["output_device_combo"].addItem(
+                "系统默认输出（跟随系统）", None
+            )
             for device in self.output_devices:
                 self.ui_controls["output_device_combo"].addItem(
                     device["name"], device["id"]
@@ -295,19 +301,21 @@ class AudioWidget(QWidget):
                         break
 
             # 选择输出设备
-            if config_output_id is not None:
-                # 使用配置中的设备
+            output_pinned = bool(
+                self.config_manager.get_config("AUDIO_DEVICES.output_device_pinned")
+            )
+            if output_pinned and config_output_id is not None:
+                # 使用已固定的具体设备
                 index = self.ui_controls["output_device_combo"].findData(
                     config_output_id
                 )
                 if index >= 0:
                     self.ui_controls["output_device_combo"].setCurrentIndex(index)
             else:
-                # 自动选择默认输出设备（带"默认"标记的）
-                for i in range(self.ui_controls["output_device_combo"].count()):
-                    if "默认" in self.ui_controls["output_device_combo"].itemText(i):
-                        self.ui_controls["output_device_combo"].setCurrentIndex(i)
-                        break
+                # 跟随系统默认输出（合成选项，data 为 None）
+                index = self.ui_controls["output_device_combo"].findData(None)
+                if index >= 0:
+                    self.ui_controls["output_device_combo"].setCurrentIndex(index)
 
             # 更新设备信息显示
             self._update_device_info()
@@ -440,8 +448,14 @@ class AudioWidget(QWidget):
         try:
             device_id = self.ui_controls["output_device_combo"].currentData()
             if device_id is None:
-                QMessageBox.warning(self, "提示", "请先选择输出设备")
-                return
+                # 跟随系统默认输出的合成选项：解析当前系统默认输出设备进行测试
+                try:
+                    default_info = sd.query_devices(kind="output")
+                    device_id = int(default_info["index"])
+                except Exception as e:
+                    self.logger.error(f"解析系统默认输出设备失败: {e}", exc_info=True)
+                    QMessageBox.warning(self, "提示", "无法获取系统默认输出设备")
+                    return
 
             self.testing_output = True
             self.ui_controls["test_output_btn"].setEnabled(False)
@@ -605,10 +619,15 @@ class AudioWidget(QWidget):
 
             # 设置输出设备
             output_device_id = audio_config.get("output_device_id")
-            if output_device_id is not None:
+            output_pinned = bool(audio_config.get("output_device_pinned", False))
+            if output_pinned and output_device_id is not None:
                 index = self.ui_controls["output_device_combo"].findData(
                     output_device_id
                 )
+                if index >= 0:
+                    self.ui_controls["output_device_combo"].setCurrentIndex(index)
+            else:
+                index = self.ui_controls["output_device_combo"].findData(None)
                 if index >= 0:
                     self.ui_controls["output_device_combo"].setCurrentIndex(index)
 
@@ -636,11 +655,16 @@ class AudioWidget(QWidget):
 
             # 输出设备配置
             output_device_id = self.ui_controls["output_device_combo"].currentData()
+            output_pinned = output_device_id is not None
+            audio_config["output_device_pinned"] = output_pinned
             if output_device_id is not None:
                 audio_config["output_device_id"] = output_device_id
                 audio_config["output_device_name"] = self.ui_controls[
                     "output_device_combo"
                 ].currentText()
+            else:
+                audio_config["output_device_id"] = None
+                audio_config["output_device_name"] = "系统默认输出"
 
             # 设备的采样率和声道信息由设备自动确定，不需要用户配置
             # 保存设备的默认采样率和声道用于后续使用

@@ -3,6 +3,7 @@ from pathlib import Path
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import QCheckBox, QComboBox, QLineEdit, QWidget
 
+from src.utils.autostart import disable_autostart, enable_autostart
 from src.utils.config_manager import ConfigManager
 from src.utils.logging_config import get_logger
 
@@ -85,10 +86,11 @@ class SystemOptionsWidget(QWidget):
             }
         )
 
-        # AEC配置控件
+        # AEC配置控件 / 开机自启动
         self.ui_controls.update(
             {
                 "aec_enabled_check": self.findChild(QCheckBox, "aec_enabled_check"),
+                "autostart_check": self.findChild(QCheckBox, "autostart_check"),
             }
         )
 
@@ -186,6 +188,12 @@ class SystemOptionsWidget(QWidget):
             # AEC配置
             aec_enabled = self.config_manager.get_config("AEC_OPTIONS.ENABLED", True)
             self._set_check_value("aec_enabled_check", aec_enabled)
+
+            # 开机自启动
+            autostart = self.config_manager.get_config(
+                "SYSTEM_OPTIONS.AUTOSTART", False
+            )
+            self._set_check_value("autostart_check", autostart)
 
         except Exception as e:
             self.logger.error(f"加载系统选项配置值失败: {e}", exc_info=True)
@@ -320,6 +328,10 @@ class SystemOptionsWidget(QWidget):
             aec_enabled = self._get_check_value("aec_enabled_check")
             config_data["AEC_OPTIONS.ENABLED"] = aec_enabled
 
+            # 开机自启动
+            autostart = self._get_check_value("autostart_check")
+            config_data["SYSTEM_OPTIONS.AUTOSTART"] = autostart
+
         except Exception as e:
             self.logger.error(f"获取系统选项配置数据失败: {e}", exc_info=True)
 
@@ -364,7 +376,26 @@ class SystemOptionsWidget(QWidget):
                 "aec_enabled_check", default_aec.get("ENABLED", False)
             )
 
+            # 开机自启动默认值
+            default_autostart = default_config["SYSTEM_OPTIONS"].get("AUTOSTART", False)
+            self._set_check_value("autostart_check", default_autostart)
+
             self.logger.info("系统选项配置已重置为默认值")
 
         except Exception as e:
             self.logger.error(f"重置系统选项配置失败: {e}", exc_info=True)
+
+    def apply_autostart(self):
+        """
+        应用开机自启动设置（写入/移除系统注册表）.
+        """
+        try:
+            enabled = self._get_check_value("autostart_check")
+            if enabled:
+                success = enable_autostart()
+            else:
+                success = disable_autostart()
+            if success:
+                self.logger.info(f"开机自启动已{'启用' if enabled else '关闭'}")
+        except Exception as e:
+            self.logger.error(f"应用开机自启动设置失败: {e}", exc_info=True)

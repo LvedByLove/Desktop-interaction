@@ -697,9 +697,6 @@ class Application:
         logger.info("正在关闭Application...")
         self.running = False
 
-        if self._shutdown_event is not None:
-            self._shutdown_event.set()
-
         try:
             # 取消所有登记任务
             if self._tasks:
@@ -733,3 +730,8 @@ class Application:
             logger.info("Application 关闭完成")
         except Exception as e:
             logger.error(f"关闭应用时出错: {e}", exc_info=True)
+        finally:
+            # 收尾时置位关停事件，唤醒 run() 中的 _wait_shutdown，
+            # 使其在异步清理全部完成后再返回，避免事件循环被提前关闭。
+            if self._shutdown_event is not None:
+                self._shutdown_event.set()
