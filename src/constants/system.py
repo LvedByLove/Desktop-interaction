@@ -20,7 +20,7 @@ class SystemConstants:
 
     # 应用信息
     APP_NAME = "py-xiaozhi"
-    APP_VERSION = "2.0.0"
+    APP_VERSION = "2.12.15"
     BOARD_TYPE = "bread-compact-wifi"
 
     # 默认超时设置

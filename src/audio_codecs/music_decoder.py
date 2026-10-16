@@ -3,7 +3,7 @@ import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import numpy as np
 
@@ -59,6 +59,13 @@ class MusicDecoder:
         }
 
     def _find_ffmpeg(self) -> str:
+        # 优先按「进程快照 PATH + 注册表最新 PATH」定位 ffmpeg.exe。
+        # GUI 进程常在用户更新 PATH 之前就已启动，os.environ 里是旧快照；
+        # 直接读注册表能拿到最新值，避免「已安装却仍报未安装」。
+        located = self._locate_ffmpeg_from_path()
+        if located:
+            return located
+
         paths = [
             "ffmpeg",
             os.path.join(os.environ.get("ProgramFiles", "C:\\Program Files"), "ffmpeg", "bin", "ffmpeg.exe"),
@@ -79,6 +86,42 @@ class MusicDecoder:
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 continue
         return "ffmpeg"
+
+    def _locate_ffmpeg_from_path(self) -> Optional[str]:
+        """按 PATH（进程快照 + 注册表）查找 ffmpeg 可执行文件。"""
+        import shutil
+
+        entries = [e for e in os.environ.get("PATH", "").split(os.pathsep) if e]
+        entries += self._registry_path_entries()
+        search_path = os.pathsep.join(entries)
+        if search_path:
+            found = shutil.which("ffmpeg", path=search_path)
+            if found:
+                return found
+        return None
+
+    def _registry_path_entries(self) -> List[str]:
+        """读取注册表中系统/用户级 PATH（Windows），返回目录列表。"""
+        if os.name != "nt":
+            return []
+        import winreg
+
+        entries: List[str] = []
+        for root, key_name, value_name in (
+            (
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+                "Path",
+            ),
+            (winreg.HKEY_CURRENT_USER, "Environment", "Path"),
+        ):
+            try:
+                with winreg.OpenKey(root, key_name) as key:
+                    raw = winreg.QueryValueEx(key, value_name)[0]
+                entries.extend(raw.split(os.pathsep))
+            except OSError:
+                continue
+        return entries
 
     async def _resolve_ffmpeg_path(self) -> str:
         """

@@ -15,6 +15,8 @@ Rectangle {
     signal musicIndicatorDragStart()
     signal musicIndicatorDragMove()
     signal musicIndicatorDragEnd(bool moved)
+    // 请求打开独立的文件中转站窗口
+    signal fileTrayOpenRequested()
 
     // 状态机：dot / hidden / controls / input / tts
     property string viewMode: "dot"
@@ -470,6 +472,44 @@ Rectangle {
                 font.pixelSize: 11
                 color: Qt.rgba(255/255, 255/255, 255/255, 0.58)
                 elide: Text.ElideRight
+            }
+        }
+
+        Rectangle {
+            id: trayEntryBtn
+            Layout.preferredWidth: 30
+            Layout.preferredHeight: 30
+            Layout.alignment: Qt.AlignVCenter
+            radius: 15
+            color: trayEntryArea.pressed ? "#2a2a2a" : "transparent"
+            border.color: Qt.rgba(255/255, 255/255, 255/255, 0.14)
+            border.width: 1
+
+            // 简单文件夹图标（避免依赖 emoji 字体）
+            Rectangle {
+                anchors.centerIn: parent
+                anchors.verticalCenterOffset: -1
+                width: 16
+                height: 12
+                radius: 2
+                color: Qt.rgba(255/255, 255/255, 255/255, 0.75)
+            }
+            Rectangle {
+                anchors.centerIn: parent
+                anchors.verticalCenterOffset: -7
+                anchors.horizontalCenterOffset: -3
+                width: 8
+                height: 3
+                radius: 1
+                color: Qt.rgba(255/255, 255/255, 255/255, 0.75)
+            }
+
+            MouseArea {
+                id: trayEntryArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.fileTrayOpenRequested()
             }
         }
     }

@@ -7,16 +7,31 @@ import asyncio
 import ctypes
 import os
 import signal
+import sys
+import time
 from abc import ABCMeta
 from pathlib import Path
 from typing import Callable, Optional
 
-from PyQt5.QtCore import QObject, Qt, QTimer, QUrl, QPropertyAnimation, QRect, pyqtProperty, QEvent
-from PyQt5.QtGui import QCursor, QFont
+from PyQt5.QtCore import (
+    QAbstractNativeEventFilter,
+    QEvent,
+    QEasingCurve,
+    QMimeData,
+    QObject,
+    QPropertyAnimation,
+    QRect,
+    Qt,
+    QTimer,
+    QUrl,
+    pyqtProperty,
+)
+from PyQt5.QtGui import QDrag, QCursor, QFont
 from PyQt5.QtQuickWidgets import QQuickWidget
-from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QApplication, QMessageBox, QVBoxLayout, QWidget
 
 from src.display.base_display import BaseDisplay
+from src.display.file_tray_model import FileIconProvider, FileTrayModel
 from src.display.gui_display_model import GuiDisplayModel
 from src.utils.resource_finder import find_assets_dir
 
@@ -24,6 +39,40 @@ from src.utils.resource_finder import find_assets_dir
 # 创建兼容的元类
 class CombinedMeta(type(QObject), ABCMeta):
     pass
+
+
+class _WindowsSessionEndFilter(QAbstractNativeEventFilter):
+    """拦截 Windows 关机/注销消息，允许系统正常关机，避免程序阻止关机。"""
+
+    WM_QUERYENDSESSION = 0x0011
+    WM_ENDSESSION = 0x0016
+
+    def __init__(self, on_session_end):
+        super().__init__()
+        self._on_session_end = on_session_end
+
+    def nativeEventFilter(self, event_type, message):
+        try:
+            if bytes(event_type) != b"windows_generic_MSG":
+                return False, 0
+        except Exception:
+            return False, 0
+
+        try:
+            from ctypes import wintypes
+
+            msg = wintypes.MSG.from_address(int(message))
+        except Exception:
+            return False, 0
+
+        if msg.message == self.WM_QUERYENDSESSION:
+            # 返回 1 (TRUE) 允许 Windows 继续关机，同时提前置位标志
+            self._on_session_end(query_only=True)
+            return True, 1
+        if msg.message == self.WM_ENDSESSION:
+            self._on_session_end(query_only=False)
+            return True, 0
+        return False, 0
 
 
 class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
@@ -35,6 +84,8 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
     CAPSULE_SIZE = (36, 36)
     # 隐藏模式与屏幕顶部的间距
     TOP_MARGIN = 5
+    # 圆球默认位置与屏幕右边缘的间距
+    MARGIN_RIGHT = 940
     # 展开后的尺寸
     EXPANDED_SIZE = (320, 280)
     DEFAULT_FONT_SIZE = 12
@@ -52,6 +103,19 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
 
         # 数据模型
         self.display_model = GuiDisplayModel()
+
+        # 文件中转站：数据源（路径列表）与系统文件图标供给器
+        self._file_tray = FileTrayModel()
+        self._file_icon_provider = FileIconProvider()
+        self._file_tray.set_icon_provider(self._file_icon_provider)
+        # 全局拖拽检测（主动唤醒圆球），延迟到 GUI 启动后再实例化
+        self._drag_watcher = None
+        # OLE 文件拖拽捕捉器（CF_HDROP 精确判定），延迟到 GUI 启动后再实例化
+        self._ole_catcher = None
+        # 文件中转站独立窗口（与主胶囊窗口解耦，可同时显示互不干扰）
+        self.tray_root = None
+        self.tray_qml = None
+        self._tray_geometry_anim = None
 
         # 表情管理
         self._emotion_cache = {}
@@ -86,6 +150,10 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
             "abort": None,
             "send_text": None,
         }
+
+        # Windows 关机/注销状态
+        self._system_shutdown = False
+        self._session_end_filter = None
 
     # =========================================================================
     # 公共 API - 回调与更新
@@ -372,6 +440,14 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         关闭窗口处理.
         """
         self._running = False
+        # 清空中转站：让 QML 的 Repeater 在引擎仍健康时销毁大量 delegate，
+        # 避免退出时模型对象先被回收、QML 绑定空引用导致卡顿与报错。
+        # 放在停止拖拽监听之前，避免被 pynput stop() 阻塞主线程而延迟清理。
+        t0 = time.perf_counter()
+        self._file_tray.clear()
+        t1 = time.perf_counter()
+        self._stop_drag_watcher()
+        t2 = time.perf_counter()
         if self._tts_hide_timer:
             self._tts_hide_timer.cancel()
             self._tts_hide_timer = None
@@ -379,8 +455,17 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
             self.app.removeEventFilter(self)
         if self.system_tray:
             self.system_tray.hide()
+        if self.tray_root:
+            self.tray_root.close()
         if self.root:
             self.root.close()
+        t3 = time.perf_counter()
+        self.logger.info(
+            "GuiDisplay 关闭耗时: "
+            f"clear={1000 * (t1 - t0):.1f}ms, "
+            f"stop_drag_watcher={1000 * (t2 - t1):.1f}ms, "
+            f"root.close={1000 * (t3 - t2):.1f}ms"
+        )
 
     # =========================================================================
     # 启动流程
@@ -396,6 +481,7 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
             self._load_qml()
             self._setup_interactions()
             await self._finalize_startup()
+            self._start_drag_watcher()
         except Exception as e:
             self.logger.error(f"GUI启动失败: {e}", exc_info=True)
             raise
@@ -415,6 +501,36 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
 
         self._setup_signal_handlers()
         self._setup_activation_handler()
+        self._setup_session_end_filter()
+
+    def _setup_session_end_filter(self):
+        """
+        监听 Windows 关机/注销消息，正常退出而不是阻止关机.
+        """
+        if sys.platform != "win32":
+            return
+        try:
+            self._session_end_filter = _WindowsSessionEndFilter(
+                self._on_windows_session_end
+            )
+            self.app.installNativeEventFilter(self._session_end_filter)
+            self.logger.debug("已安装 Windows 会话结束监听")
+        except Exception as e:
+            self.logger.warning(f"安装会话结束监听失败: {e}")
+
+    def _on_windows_session_end(self, query_only: bool = False):
+        """
+        处理 Windows 关机/注销事件.
+
+        Args:
+            query_only: True 表示 WM_QUERYENDSESSION（仅询问，先置位标志），
+                False 表示 WM_ENDSESSION（正式结束，触发退出）。
+        """
+        if not self._system_shutdown:
+            self.logger.info("检测到系统关机/注销请求")
+        self._system_shutdown = True
+        if not query_only:
+            QTimer.singleShot(0, self._quit_application)
 
     def _create_main_window(self):
         """
@@ -427,6 +543,8 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         self.root.setFocusPolicy(Qt.StrongFocus)
         # 设置窗口透明背景
         self.root.setAttribute(Qt.WA_TranslucentBackground)
+        # 接受外部拖入（文件/文件夹），用于文件中转站
+        self.root.setAcceptDrops(True)
 
         # 使用胶囊状尺寸（圆形状态）
         self.root.resize(*self.CAPSULE_SIZE)
@@ -454,7 +572,7 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         screen_height = screen_rect.height()
 
         # 右上角位置：右边缘留出一些边距，顶部保留间距
-        margin_right = 940
+        margin_right = self.MARGIN_RIGHT
         x = screen_width - self.CAPSULE_SIZE[0] - margin_right
         y = self.TOP_MARGIN
 
@@ -521,6 +639,8 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         self.qml_widget = QQuickWidget()
         self.qml_widget.setResizeMode(QQuickWidget.SizeRootObjectToView)
         self.qml_widget.setFocusPolicy(Qt.StrongFocus)
+        # 接受外部拖入事件，配合 QML DropArea 接收文件/文件夹
+        self.qml_widget.setAcceptDrops(True)
         # 设置透明背景，配合胶囊状界面
         self.qml_widget.setClearColor(Qt.transparent)
 
@@ -538,11 +658,52 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         layout.addWidget(self.qml_widget)
         self.root.setFocusProxy(self.qml_widget)
 
+        # 创建独立的文件中转站窗口（与主胶囊窗口解耦，可同时显示互不干扰）
+        self._create_tray_window()
+
+    def _create_tray_window(self):
+        """
+        创建文件中转站独立窗口：拖拽唤醒薄条 + 中转站面板。
+
+        与主胶囊窗口完全分离，因此 TTS 播报期间拖入文件也能正常唤醒中转站，
+        不会因为共用 viewMode 状态机而互相打断。
+        """
+        self.tray_root = QWidget()
+        self.tray_root.setWindowTitle("")
+        # 无边框 + 顶层 + 工具窗口 + 不抢焦点（避免打断主胶囊输入/拖拽源焦点）
+        self.tray_root.setWindowFlags(
+            Qt.FramelessWindowHint
+            | Qt.WindowStaysOnTopHint
+            | Qt.Tool
+            | Qt.WindowDoesNotAcceptFocus
+        )
+        self.tray_root.setAttribute(Qt.WA_TranslucentBackground)
+        self.tray_root.setAcceptDrops(True)
+        self.tray_root.setMinimumSize(1, 1)
+        self.tray_root.hide()
+
+        self.tray_qml = QQuickWidget()
+        self.tray_qml.setResizeMode(QQuickWidget.SizeRootObjectToView)
+        self.tray_qml.setFocusPolicy(Qt.NoFocus)
+        self.tray_qml.setAcceptDrops(True)
+        self.tray_qml.setClearColor(Qt.transparent)
+
+        qml_context = self.tray_qml.rootContext()
+        qml_context.setContextProperty("fileTrayModel", self._file_tray)
+
+        qml_file = Path(__file__).parent / "file_tray_window.qml"
+        self.tray_qml.setSource(QUrl.fromLocalFile(str(qml_file)))
+
+        layout = QVBoxLayout(self.tray_root)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.tray_qml)
+
     def _setup_interactions(self):
         """
         设置交互（信号、托盘）
         """
         self._connect_qml_signals()
+        self._connect_tray_qml_signals()
 
     async def _finalize_startup(self):
         """
@@ -603,8 +764,13 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
             "musicIndicatorDragEnd": self._on_music_indicator_drag_end,
         }
 
+        # 文件中转站：主胶囊上的打开入口（文件夹图标）→ 打开独立中转站窗口
+        tray_signals = {
+            "fileTrayOpenRequested": self._open_file_tray,
+        }
+
         # 批量连接信号
-        all_signals = {**button_signals, **titlebar_signals, **window_signals, **system_signals}
+        all_signals = {**button_signals, **titlebar_signals, **window_signals, **system_signals, **tray_signals}
         for signal_name, handler in all_signals.items():
             try:
                 getattr(root_object, signal_name).connect(handler)
@@ -612,6 +778,115 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
                 self.logger.debug(f"信号 {signal_name} 不存在（可能是可选功能）")
 
         self.logger.debug("QML 信号连接设置完成")
+
+    def _connect_tray_qml_signals(self):
+        """
+        连接独立的文件中转站窗口信号到 Python 槽。
+        """
+        if not self.tray_qml:
+            return
+        root_object = self.tray_qml.rootObject()
+        if not root_object:
+            self.logger.warning("中转站 QML 根对象未找到，无法设置信号连接")
+            return
+
+        tray_signals = {
+            "windowResizeRequested": self._on_tray_window_resize_requested,
+            "filesDropped": self._on_files_dropped,
+            "fileDragRequested": self._on_file_drag_requested,
+            "fileRemoveRequested": self._on_file_remove_requested,
+            "fileTrayClosed": self._on_file_tray_closed,
+            "fadeOutDone": self._on_tray_fade_out_done,
+            "selectIndex": self._on_tray_select_index,
+            "marqueeSelection": self._on_tray_marquee_selection,
+            "clearSelection": self._on_tray_clear_selection,
+        }
+        for signal_name, handler in tray_signals.items():
+            try:
+                getattr(root_object, signal_name).connect(handler)
+            except AttributeError:
+                self.logger.debug(f"中转站信号 {signal_name} 不存在（可能是可选功能）")
+
+        self.logger.debug("文件中转站信号连接设置完成")
+
+    def _show_tray_window(self):
+        """显示中转站窗口（保持顶层，不抢焦点），首次显示时做淡入。"""
+        if not self.tray_root:
+            return
+        was_visible = self.tray_root.isVisible()
+        if not was_visible:
+            root_object = self.tray_qml.rootObject() if self.tray_qml else None
+            if root_object and hasattr(root_object, "appear"):
+                try:
+                    root_object.appear()
+                except Exception as e:
+                    self.logger.debug(f"中转站淡入失败: {e}")
+        self.tray_root.show()
+        self.tray_root.raise_()
+
+    def _open_file_tray(self):
+        """打开文件中转站面板（独立窗口）。"""
+        root_object = self.tray_qml.rootObject() if self.tray_qml else None
+        if root_object and hasattr(root_object, "openFileTray"):
+            try:
+                # 先按目标尺寸调整窗口，再显示，避免闪现默认尺寸
+                root_object.openFileTray()
+                self._show_tray_window()
+            except Exception as e:
+                self.logger.debug(f"打开中转站失败: {e}")
+
+    def _fade_out_tray_window(self):
+        """淡出中转站窗口；完成后由 fadeOutDone 信号触发隐藏。"""
+        root_object = self.tray_qml.rootObject() if self.tray_qml else None
+        if root_object and hasattr(root_object, "fadeOutNow"):
+            try:
+                root_object.fadeOutNow()
+                return
+            except Exception as e:
+                self.logger.debug(f"中转站淡出失败: {e}")
+        # 兜底：无法淡出时直接隐藏
+        self._on_tray_fade_out_done()
+
+    def _on_tray_fade_out_done(self):
+        """淡出动画结束：真正隐藏中转站窗口。"""
+        if self.tray_root:
+            self.tray_root.hide()
+
+    def _hide_tray_window_if_idle(self):
+        """拖拽结束后，若中转站面板未打开且窗口当前可见，则淡出隐藏整个中转站窗口。"""
+        root_object = self.tray_qml.rootObject() if self.tray_qml else None
+        tray_visible = bool(root_object.property("trayVisible")) if root_object else False
+        if not tray_visible and self.tray_root and self.tray_root.isVisible():
+            self._fade_out_tray_window()
+
+    def _on_tray_window_resize_requested(self, width: int, height: int):
+        """中转站窗口尺寸变化：始终保持在主屏顶部居中，并做平滑几何过渡。"""
+        if not self.tray_root:
+            return
+        desktop = QApplication.desktop()
+        screen_rect = desktop.availableGeometry()
+        new_x = screen_rect.left() + (screen_rect.width() - width) // 2
+        new_y = screen_rect.top()
+        target_rect = QRect(new_x, new_y, width, height)
+
+        # 窗口尚未显示时直接定位，避免首帧闪现默认尺寸
+        if not self.tray_root.isVisible():
+            self.tray_root.setGeometry(target_rect)
+            return
+
+        try:
+            if self._tray_geometry_anim is None:
+                self._tray_geometry_anim = QPropertyAnimation(self.tray_root, b"geometry")
+                self._tray_geometry_anim.setDuration(220)
+                self._tray_geometry_anim.setEasingCurve(QEasingCurve.OutCubic)
+            if self._tray_geometry_anim.state() == QPropertyAnimation.Running:
+                self._tray_geometry_anim.stop()
+            self._tray_geometry_anim.setStartValue(self.tray_root.geometry())
+            self._tray_geometry_anim.setEndValue(target_rect)
+            self._tray_geometry_anim.start()
+        except Exception as e:
+            self.logger.debug(f"中转站窗口动画失败，直接调整: {e}")
+            self.tray_root.setGeometry(target_rect)
 
     # =========================================================================
     # 按钮事件处理
@@ -680,7 +955,7 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         try:
             from src.views.settings import SettingsWindow
 
-            settings_window = SettingsWindow(self.root)
+            settings_window = SettingsWindow()
             settings_window.exec_()
         except Exception as e:
             self.logger.error(f"打开设置窗口失败: {e}", exc_info=True)
@@ -776,6 +1051,15 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
                 # 如果底部超出，向上调整位置
                 new_y = screen_rect.bottom() - height
 
+            # 隐藏模式直接收起（不做缩放动画），避免关闭中转站/拖拽退出时闪现"小球"
+            if view_mode == "hidden":
+                if hasattr(self, "_window_animation") and self._window_animation is not None:
+                    if self._window_animation.state() == QPropertyAnimation.Running:
+                        self._window_animation.stop()
+                self.root.setGeometry(new_x, new_y, width, height)
+                self.logger.debug(f"窗口已隐藏: {width}x{height}，位置: ({new_x}, {new_y})")
+                return
+
             # 使用 Qt 动画实现平滑收缩效果
             try:
                 # 如果动画正在运行，先停止
@@ -831,6 +1115,227 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         self._music_indicator_drag_position = None
         if moved:
             self._music_indicator_was_moved = True
+
+    # =========================================================================
+    # 文件中转站
+    # =========================================================================
+
+    def _start_drag_watcher(self):
+        """启动全局拖拽检测链路：pynput 粗检测 + OLE CF_HDROP 精确判定。
+
+        两个组件各自独立失败域：一个初始化失败不影响另一个启动。
+        """
+        # 1) pynput 粗检测（把疑似拖拽的开始/结束转发给 OLE 捕捉窗口）
+        try:
+            from src.display.file_drag_watcher import FileDragWatcher
+
+            self._drag_watcher = FileDragWatcher(self)
+            self._drag_watcher.dragStarted.connect(self._on_global_drag_started)
+            self._drag_watcher.dragEnded.connect(self._on_global_drag_ended)
+            self._drag_watcher.start()
+            self.logger.info("pynput 全局拖拽检测已启动")
+        except Exception as e:
+            self.logger.error(f"启动 pynput 拖拽检测失败: {e}", exc_info=True)
+
+        # 2) OLE 捕捉器（CF_HDROP 精确判定后才唤醒圆球）
+        try:
+            from src.display.ole_drop_catcher import OleDropCatcher
+
+            self._ole_catcher = OleDropCatcher(self)
+            self._ole_catcher.fileDragEntered.connect(self._on_file_drag_entered)
+            self._ole_catcher.start()
+            self.logger.info("OLE 文件拖拽捕捉器已启动")
+        except Exception as e:
+            self.logger.error(f"启动 OLE 捕捉器失败: {e}", exc_info=True)
+
+    def _stop_drag_watcher(self):
+        """停止全局拖拽检测。"""
+        if self._drag_watcher:
+            try:
+                self._drag_watcher.stop()
+            except Exception:
+                pass
+            self._drag_watcher = None
+        if self._ole_catcher:
+            try:
+                self._ole_catcher.stop()
+            except Exception:
+                pass
+            self._ole_catcher = None
+
+    def _on_global_drag_started(self):
+        """疑似拖拽开始（按下左键并移动超阈值）：显示 OLE 隐形捕捉窗口。
+
+        是否唤醒圆球由捕捉窗口的 CF_HDROP 判定决定（见 _on_file_drag_entered）。
+        """
+        self.logger.info("疑似拖拽开始：显示 OLE 捕捉窗口")
+        if self._ole_catcher:
+            try:
+                self._ole_catcher.show()
+            except Exception as e:
+                self.logger.debug(f"显示捕捉窗口失败: {e}")
+
+    def _on_global_drag_ended(self):
+        """拖拽结束（松开左键）：隐藏捕捉窗口，唤醒薄条回落待命态。"""
+        self.logger.info("拖拽结束：隐藏 OLE 捕捉窗口")
+        if self._ole_catcher:
+            try:
+                self._ole_catcher.hide()
+            except Exception as e:
+                self.logger.debug(f"隐藏捕捉窗口失败: {e}")
+        root_object = self.tray_qml.rootObject() if self.tray_qml else None
+        if root_object and hasattr(root_object, "unwakeBall"):
+            try:
+                root_object.unwakeBall()
+            except Exception as e:
+                self.logger.debug(f"唤醒薄条回落失败: {e}")
+        self._hide_tray_window_if_idle()
+
+    def _on_file_drag_entered(self):
+        """OLE 确认文件/文件夹拖拽经过顶部目标区：唤醒薄条作为可拖放目标。"""
+        self.logger.info("OLE 命中文件拖拽：唤醒中转站")
+        root_object = self.tray_qml.rootObject() if self.tray_qml else None
+        if root_object and hasattr(root_object, "wakeBall"):
+            try:
+                # 先按唤醒薄条尺寸调整窗口，再显示，避免闪现默认尺寸
+                root_object.wakeBall()
+                self._show_tray_window()
+            except Exception as e:
+                self.logger.debug(f"唤醒中转站失败: {e}")
+
+    def _on_files_dropped(self, urls):
+        """
+        处理外部文件/文件夹拖入中转站.
+
+        QML DropArea 传入的是 file:/// 形式的 URL 列表，这里提取本地路径并去重加入。
+        """
+        try:
+            # QML 信号传入的数组在 Python 侧是 QJSValue，需转成 Python 列表
+            if hasattr(urls, "toVariant"):
+                urls = urls.toVariant()
+            local_paths = []
+            for u in urls or []:
+                # 单个元素也可能是 QJSValue，统一转字符串
+                if hasattr(u, "toString"):
+                    u = u.toString()
+                if not u:
+                    continue
+                url = QUrl(u)
+                if url.isLocalFile():
+                    local_paths.append(url.toLocalFile())
+            if local_paths:
+                added = self._file_tray.add_paths(local_paths)
+                # 提前生成图标并落盘缓存，避免 QML 渲染线程在 data() 里同步查询 shell 图标导致卡顿
+                for p in added:
+                    self._file_icon_provider.icon_url_for_path(p)
+                self.logger.info(f"文件中转站新增 {len(added)} 项，共 {len(self._file_tray.paths)} 项")
+        except Exception as e:
+            self.logger.error(f"处理文件拖入失败: {e}", exc_info=True)
+
+    def _on_file_drag_requested(self, index: int, is_copy: bool):
+        """
+        处理从托盘图标拖出文件：默认=复制，拖放过程中按修饰键切换复制/剪切.
+
+        若拖动的条目正处于选中集，则批量拖出所有选中项；否则仅拖出该条目
+        （并把选中收敛到该条目，符合资源管理器"拖动未选中项=先选中它"）。
+        """
+        try:
+            paths = self._file_tray.paths
+            if index < 0 or index >= len(paths):
+                return
+
+            selected = self._file_tray.selected_indexes()
+            if index in selected and len(selected) > 1:
+                drag_indices = selected
+            else:
+                drag_indices = [index]
+                self._file_tray.select_only(index)
+
+            drag_paths = [paths[i] for i in drag_indices if 0 <= i < len(paths)]
+            if not drag_paths:
+                return
+
+            # 拖出前校验源位置：引用已失效的文件提醒用户并清理，不参与本次拖拽
+            missing = [(i, paths[i]) for i in drag_indices
+                       if 0 <= i < len(paths) and not os.path.exists(paths[i])]
+            if missing:
+                names = "\n".join(f"• {p}" for _, p in missing)
+                QMessageBox.warning(
+                    self.tray_root,
+                    "文件源位置不存在",
+                    f"以下文件/文件夹的原位置已不存在，已从中转站移除：\n\n{names}",
+                )
+                for i in sorted((i for i, _ in missing), reverse=True):
+                    self._file_tray.remove_index(i)
+                missing_paths = {p for _, p in missing}
+                drag_paths = [p for p in drag_paths if p not in missing_paths]
+                if not drag_paths:
+                    return
+
+            mime = QMimeData()
+            mime.setUrls([QUrl.fromLocalFile(p) for p in drag_paths])
+
+            drag = QDrag(self.tray_root)
+            drag.setMimeData(mime)
+            pixmap = self._file_icon_provider.drag_pixmap_for_path(drag_paths[0])
+            if not pixmap.isNull():
+                drag.setPixmap(pixmap)
+
+            # 支持复制 + 移动，默认复制；拖放中按修饰键可动态切换
+            drag.exec_(Qt.CopyAction | Qt.MoveAction, Qt.CopyAction)
+            # 拖出结束后按磁盘实际存在性清理：条目被"移动/剪切"到别处或拖入
+            # 回收站后，源路径已不存在，此时从中转站移除其引用。复制到别处时
+            # 源文件仍在，不会被误删。降序遍历避免删除时索引偏移。
+            for i in sorted(drag_indices, reverse=True):
+                if 0 <= i < len(paths) and not os.path.exists(paths[i]):
+                    self._file_tray.remove_index(i)
+        except Exception as e:
+            self.logger.error(f"从托盘拖出文件失败: {e}", exc_info=True)
+
+    def _on_file_remove_requested(self, index: int):
+        """右键单击中转站某一项：将其从托盘移除（仅移除引用，不动磁盘原文件）。"""
+        try:
+            if self._file_tray.remove_index(index):
+                self.logger.info(f"已从中转站移除第 {index} 项")
+        except Exception as e:
+            self.logger.error(f"从中转站移除文件失败: {e}", exc_info=True)
+
+    def _on_tray_select_index(self, index: int, mode: int):
+        """中转站点击选择：mode 0=单选替换 / 1=Ctrl切换 / 2=Shift连续。"""
+        try:
+            if mode == 1:
+                self._file_tray.toggle_selected(index)
+            elif mode == 2:
+                self._file_tray.select_range_to(index)
+            else:
+                self._file_tray.select_only(index)
+        except Exception as e:
+            self.logger.debug(f"中转站选择失败: {e}")
+
+    def _on_tray_marquee_selection(self, indices):
+        """中转站空白框选：按命中的索引集合替换选中。"""
+        try:
+            if hasattr(indices, "toVariant"):
+                indices = indices.toVariant()
+            self._file_tray.select_indices(indices)
+        except Exception as e:
+            self.logger.debug(f"中转站框选失败: {e}")
+
+    def _on_tray_clear_selection(self):
+        """中转站空白点击：清空选中。"""
+        try:
+            self._file_tray.clear_selection()
+        except Exception as e:
+            self.logger.debug(f"中转站清空选中失败: {e}")
+
+    def _on_file_tray_closed(self):
+        """关闭中转站时清空所有暂存文件（仅移除引用，不动磁盘原文件），并淡出隐藏窗口。"""
+        try:
+            self._file_tray.clear()
+            self.logger.info("中转站已关闭，已清空所有暂存文件")
+        except Exception as e:
+            self.logger.error(f"清空中转站失败: {e}", exc_info=True)
+        self._fade_out_tray_window()
 
     # =========================================================================
     # 窗口拖动
@@ -1023,7 +1528,12 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
                     self.logger.error(f"应用程序关闭异常: {task.exception()}")
                 else:
                     self.logger.info("应用程序正常关闭")
-                QApplication.quit()
+                # 不在这里 quit：shutdown() 完成时 _shutdown_event 已置位，
+                # Application.run() 会自行返回并让主函数正常退出。
+                # 若此处立即 QApplication.quit()，会在 run() 收尾（finally await
+                # shutdown）之前提前停掉 qasync 循环，触发
+                # "Event loop stopped before Future completed"。
+                # quit 仅在关闭超时（force_quit）或异常兜底时使用。
 
             def force_quit():
                 if not shutdown_task.done():
@@ -1042,6 +1552,13 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         """
         处理窗口关闭事件.
         """
+        # 系统关机/注销时直接退出，不再最小化到托盘，避免阻止关机
+        if self._system_shutdown:
+            self.logger.info("系统关机中：关闭窗口")
+            QTimer.singleShot(0, self._quit_application)
+            event.accept()
+            return
+
         # 如果系统托盘可用，最小化到托盘
         if self.system_tray and (
             getattr(self.system_tray, "is_available", lambda: False)()

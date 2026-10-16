@@ -1,5 +1,6 @@
 import asyncio
 import gc
+import threading
 from collections import deque
 from typing import Callable, List, Optional, Protocol
 
@@ -17,6 +18,7 @@ from src.audio_codecs.audio_channels import (
 from src.constants.constants import AudioConfig
 from src.utils.audio_utils import (
     downmix_to_mono,
+    get_windows_default_output_name,
     safe_queue_put,
     select_audio_device,
     upmix_mono_to_channels,
@@ -127,6 +129,16 @@ class AudioCodec:
         # 状态标记
         self._is_closing = False
 
+        # 输入/输出流 finished 回调完成信号（PortAudio 后台线程触发），
+        # 用于在 close() 中等待流彻底释放，避免进程退出时 Pa_Terminate 与
+        # 尚未结束的流回调线程发生竞态导致卡顿/挂起
+        self._input_finished_evt = threading.Event()
+        self._output_finished_evt = threading.Event()
+
+        # 输出设备跟随系统默认：记录输出流当前绑定的默认设备名称，用于检测热插拔切换
+        self._bound_output_name = None
+        self._output_monitor_task = None
+
     async def initialize(self):
         """初始化音频设备和编解码器.
 
@@ -148,6 +160,11 @@ class AudioCodec:
 
             # 创建音频流（使用设备原生格式）
             await self._create_streams()
+
+            # 启动输出设备热插拔监控（跟随系统默认输出设备切换，如插入耳机）
+            self._output_monitor_task = asyncio.create_task(
+                self._monitor_output_device()
+            )
 
             # 初始化AEC处理器（如果提供）
             if self.audio_processor:
@@ -176,24 +193,40 @@ class AudioCodec:
 
         input_device_id = audio_config.get("input_device_id")
         output_device_id = audio_config.get("output_device_id")
+        output_pinned = bool(audio_config.get("output_device_pinned", False))
 
         # 首次运行：自动选择设备
-        if input_device_id is None or output_device_id is None:
+        if input_device_id is None:
             logger.info("首次运行，自动选择音频设备...")
             await self._auto_detect_devices()
             return
 
         # 从配置加载
         self.mic_device_id = input_device_id
-        self.speaker_device_id = output_device_id
         self.device_input_sample_rate = audio_config.get(
             "input_sample_rate", AudioConfig.INPUT_SAMPLE_RATE
         )
-        self.device_output_sample_rate = audio_config.get(
-            "output_sample_rate", AudioConfig.OUTPUT_SAMPLE_RATE
-        )
         self.input_channels = audio_config.get("input_channels", 1)
-        self.output_channels = audio_config.get("output_channels", 1)
+
+        # 输出设备：未固定时跟随系统默认（耳机插入后自动切换路由）
+        if output_pinned and output_device_id is not None:
+            self.speaker_device_id = output_device_id
+            self.device_output_sample_rate = audio_config.get(
+                "output_sample_rate", AudioConfig.OUTPUT_SAMPLE_RATE
+            )
+            self.output_channels = audio_config.get("output_channels", 1)
+        else:
+            self.speaker_device_id = None
+            default_info = self._resolve_default_output()
+            if default_info:
+                _, self.device_output_sample_rate, self.output_channels = default_info
+            else:
+                # 解析默认设备失败时回退到已存配置（可能已失效，但至少可尝试）
+                self.device_output_sample_rate = audio_config.get(
+                    "output_sample_rate", AudioConfig.OUTPUT_SAMPLE_RATE
+                )
+                self.output_channels = audio_config.get("output_channels", 1)
+            logger.info("输出设备跟随系统默认输出")
 
         # 计算设备帧大小
         self._device_input_frame_size = int(
@@ -208,29 +241,86 @@ class AudioCodec:
             f"输出: {self.device_output_sample_rate}Hz {self.output_channels}ch"
         )
 
+    def _resolve_default_output(self):
+        """
+        解析当前系统默认输出设备的 (device, sample_rate, channels)。
+        device 固定返回 None，表示让 sounddevice 使用系统默认设备。
+        """
+        try:
+            info = sd.query_devices(kind="output")
+            sample_rate = int(info.get("default_samplerate") or AudioConfig.OUTPUT_SAMPLE_RATE)
+            channels = min(
+                int(info.get("max_output_channels") or 1),
+                AudioConfig.MAX_OUTPUT_CHANNELS,
+            )
+            return None, sample_rate, channels
+        except Exception as e:
+            logger.debug(f"解析默认输出设备失败: {e}")
+            return None
+
+    def _get_live_default_output_name(self):
+        """
+        实时获取 Windows 当前默认输出设备的友好名称（不依赖 PortAudio 缓存）.
+        """
+        return get_windows_default_output_name()
+
+    def _re_resolve_input_device(self) -> Optional[int]:
+        """
+        PortAudio 重新枚举后重定位输入设备索引.
+
+        重新初始化 PortAudio 会刷新设备列表，理论上索引顺序不变，但为稳妥起见：
+        1) 若旧索引仍指向有效的输入设备则直接复用；
+        2) 否则按已保存的输入设备名称反查；
+        3) 兜底回退到系统默认输入。
+        """
+        try:
+            if self.mic_device_id is not None:
+                d = sd.query_devices(self.mic_device_id)
+                if int(d.get("max_input_channels", 0)) > 0:
+                    return self.mic_device_id
+        except Exception:
+            pass
+
+        name = self.config.get_config("AUDIO_DEVICES", {}).get("input_device_name")
+        if name:
+            try:
+                for i, d in enumerate(sd.query_devices()):
+                    if int(d.get("max_input_channels", 0)) > 0 and d.get("name") == name:
+                        return i
+            except Exception:
+                pass
+
+        info = select_audio_device("input", include_virtual=False)
+        return info["index"] if info else self.mic_device_id
+
     async def _auto_detect_devices(self):
         """
         自动检测并选择最佳设备.
         """
-        # 使用智能设备选择
+        # 输入设备：智能选择
         in_info = select_audio_device("input", include_virtual=False)
-        out_info = select_audio_device("output", include_virtual=False)
+        if not in_info:
+            raise RuntimeError("无法找到可用的音频输入设备")
 
-        if not in_info or not out_info:
-            raise RuntimeError("无法找到可用的音频设备")
+        # 输出设备：跟随系统默认（插入耳机后由系统自动切换路由），解析默认输出能力
+        self.speaker_device_id = None
+        default_output = self._resolve_default_output()
+        if not default_output:
+            raise RuntimeError("无法找到可用的音频输出设备")
+        _, self.device_output_sample_rate, self.output_channels = default_output
 
-        # 限制声道数（避免100+声道设备性能浪费）
+        # 获取默认输出设备名称（用于 UI 显示与日志）
+        try:
+            default_output_name = sd.query_devices(kind="output").get("name")
+        except Exception:
+            default_output_name = None
+
+        # 限制输入声道数（避免100+声道设备性能浪费）
         raw_input_channels = in_info["channels"]
-        raw_output_channels = out_info["channels"]
-
         self.input_channels = min(raw_input_channels, AudioConfig.MAX_INPUT_CHANNELS)
-        self.output_channels = min(raw_output_channels, AudioConfig.MAX_OUTPUT_CHANNELS)
 
-        # 记录设备信息
         self.mic_device_id = in_info["index"]
-        self.speaker_device_id = out_info["index"]
-        self.device_input_sample_rate = in_info["sample_rate"]
-        self.device_output_sample_rate = out_info["sample_rate"]
+        self.device_input_sample_rate = in_info["sample_rate"] or AudioConfig.INPUT_SAMPLE_RATE
 
         # 计算帧大小
         self._device_input_frame_size = int(
@@ -240,21 +330,17 @@ class AudioCodec:
             self.device_output_sample_rate * (AudioConfig.FRAME_DURATION / 1000)
         )
 
-        # 日志输出
         if raw_input_channels > AudioConfig.MAX_INPUT_CHANNELS:
             logger.info(
                 f"输入设备支持 {raw_input_channels} 声道，限制使用前 {self.input_channels} 声道"
-            )
-        if raw_output_channels > AudioConfig.MAX_OUTPUT_CHANNELS:
-            logger.info(
-                f"输出设备支持 {raw_output_channels} 声道，限制使用前 {self.output_channels} 声道"
             )
 
         logger.info(
             f"选择输入设备: {in_info['name']} ({self.device_input_sample_rate}Hz, {self.input_channels}ch)"
         )
         logger.info(
-            f"选择输出设备: {out_info['name']} ({self.device_output_sample_rate}Hz, {self.output_channels}ch)"
+            f"输出跟随系统默认: {default_output_name} "
+            f"({self.device_output_sample_rate}Hz, {self.output_channels}ch)"
         )
 
         # 保存配置（首次运行时保存）
@@ -266,9 +352,10 @@ class AudioCodec:
         self.config.update_config("AUDIO_DEVICES.input_channels", self.input_channels)
 
         self.config.update_config(
-            "AUDIO_DEVICES.output_device_id", self.speaker_device_id
+            "AUDIO_DEVICES.output_device_id", None
         )
-        self.config.update_config("AUDIO_DEVICES.output_device_name", out_info["name"])
+        self.config.update_config("AUDIO_DEVICES.output_device_name", default_output_name)
+        self.config.update_config("AUDIO_DEVICES.output_device_pinned", False)
         self.config.update_config(
             "AUDIO_DEVICES.output_sample_rate", self.device_output_sample_rate
         )
@@ -369,6 +456,8 @@ class AudioCodec:
 
             self.input_stream.start()
             self.output_stream.start()
+
+            self._bound_output_name = self._get_live_default_output_name()
 
             logger.info(
                 f"音频流已启动 | 输入: {self.device_input_sample_rate}Hz {self.input_channels}ch | "
@@ -472,6 +561,13 @@ class AudioCodec:
             if "underflow" not in str(status).lower():
                 logger.warning(f"输出流状态: {status}")
 
+        # 关闭流程中直接回填静音并返回，避免在 stop/close 与置空输出流、清理
+        # 重采样器之间存在 TOCTOU 竞态窗口：PortAudio 可能在流停止后仍触发一次
+        # 回调，此时访问已置空的流/重采样器可能导致原生崩溃（表现为退出异常）。
+        if self._is_closing:
+            outdata.fill(0)
+            return
+
         try:
             if self._has_output_resampler():
                 self._output_callback_with_resample(outdata, frames)
@@ -573,12 +669,20 @@ class AudioCodec:
         输入流结束回调.
         """
         logger.info("输入流已结束")
+        try:
+            self._input_finished_evt.set()
+        except Exception:
+            pass
 
     def _output_finished_callback(self):
         """
         输出流结束回调.
         """
         logger.info("输出流已结束")
+        try:
+            self._output_finished_evt.set()
+        except Exception:
+            pass
 
     # ============= 对外接口方法 =============
 
@@ -774,6 +878,7 @@ class AudioCodec:
                     latency="low",
                 )
                 self.output_stream.start()
+                self._bound_output_name = self._get_live_default_output_name()
                 logger.info("输出流重新初始化成功")
                 return None
         except Exception as e:
@@ -783,6 +888,188 @@ class AudioCodec:
                 return False
             else:
                 raise
+
+    async def start_input_stream(self) -> bool:
+        """启动（或重建）麦克风输入流。已运行时直接返回 True。
+
+        用于从“已释放”状态恢复麦克风采集。唤醒词等监听器会被自动重新拾取，
+        因为监听器列表在释放输入流时不会被清空。
+        """
+        if self._is_closing:
+            return False
+
+        # 已运行则直接返回
+        if self.input_stream is not None:
+            try:
+                if self.input_stream.active:
+                    return True
+            except Exception:
+                pass
+
+        try:
+            self.input_stream = sd.InputStream(
+                device=self.mic_device_id,
+                samplerate=self.device_input_sample_rate,
+                channels=self.input_channels,
+                dtype=np.float32,
+                blocksize=self._device_input_frame_size,
+                callback=self._input_callback,
+                finished_callback=self._input_finished_callback,
+                latency="low",
+            )
+            self.input_stream.start()
+            logger.info("输入流已启动")
+            return True
+        except Exception as e:
+            logger.error(f"启动输入流失败: {e}")
+            return False
+
+    async def stop_input_stream(self) -> None:
+        """停止并关闭麦克风输入流，释放麦克风设备。
+
+        关闭后可随时通过 start_input_stream 重建恢复。
+        """
+        if self.input_stream is None:
+            return
+        self._stop_stream_sync(self.input_stream, "输入")
+        self.input_stream = None
+        # 清空输入重采样缓冲，避免恢复后混入释放前的残留音频
+        if self._resample_input_buffer:
+            self._resample_input_buffer.clear()
+        logger.info("输入流已释放")
+
+    async def _follow_default_output(self):
+        """
+        检测到系统默认输出设备变化后，重新初始化音频层以跟随新默认设备。
+
+        PortAudio 在初始化时缓存设备列表与默认设备，运行时切换系统默认（如插入
+        耳机）不会自动更新；直接按索引重建可能触发 MME "device ID out of range"
+        （设备热插拔导致缓存列表陈旧）。因此这里关闭所有流后重新初始化 PortAudio
+        （等价于音频层"重启"，已被验证有效），再用 device=None 重新打开，使输出
+        真正跟随新的系统默认设备。
+        """
+        new_name = self._get_live_default_output_name()
+
+        # 记录输入流在重建前是否处于运行状态，避免待命下热插拔重新打开麦克风
+        input_was_running = self.input_stream is not None and getattr(
+            self.input_stream, "active", False
+        )
+
+        # 1. 关闭现有流（_terminate 会释放 PortAudio 内的所有流）
+        for attr in ("output_stream", "input_stream"):
+            stream = getattr(self, attr)
+            if stream:
+                try:
+                    if stream.active:
+                        stream.stop()
+                    stream.close()
+                except Exception as e:
+                    logger.warning(f"关闭{attr}失败: {e}")
+                setattr(self, attr, None)
+
+        # 2. 重新初始化 PortAudio，刷新设备列表与默认设备
+        try:
+            sd._terminate()
+            sd._initialize()
+        except Exception as e:
+            logger.warning(f"重新初始化 PortAudio 失败: {e}")
+
+        # 3. 重新定位输入设备（重枚举后索引可能变化）
+        self.mic_device_id = self._re_resolve_input_device()
+
+        # 4. 重新解析默认输出（此时已实时）
+        self.speaker_device_id = None
+        default_info = self._resolve_default_output()
+        if default_info:
+            _, self.device_output_sample_rate, self.output_channels = default_info
+        else:
+            logger.warning("重新解析默认输出失败，保持原采样率/声道")
+
+        # 5. 重建输出端重采样器并清空残留缓冲（避免旧采样率的脏数据）
+        for channel in OUTPUT_CHANNELS:
+            resampler = self._output_resamplers.get(channel)
+            if resampler is not None:
+                await self._cleanup_resampler(resampler, f"输出-{channel}")
+            self._output_resamplers[channel] = None
+
+            buffer = self._resample_output_buffers.get(channel)
+            if buffer:
+                buffer.clear()
+
+        if self.device_output_sample_rate != AudioConfig.OUTPUT_SAMPLE_RATE:
+            for channel in OUTPUT_CHANNELS:
+                self._output_resamplers[channel] = soxr.ResampleStream(
+                    AudioConfig.OUTPUT_SAMPLE_RATE,
+                    self.device_output_sample_rate,
+                    num_channels=1,  # 重采样器处理单声道（上混前）
+                    dtype="float32",
+                    quality="QQ",
+                )
+        self._need_output_upmix = self.output_channels > 1
+
+        # 6. 重新计算帧大小并重开两条流（device=None 跟随新默认设备）
+        self._device_input_frame_size = int(
+            self.device_input_sample_rate * (AudioConfig.FRAME_DURATION / 1000)
+        )
+        self._device_output_frame_size = int(
+            self.device_output_sample_rate * (AudioConfig.FRAME_DURATION / 1000)
+        )
+
+        try:
+            if input_was_running:
+                self.input_stream = sd.InputStream(
+                    device=self.mic_device_id,
+                    samplerate=self.device_input_sample_rate,
+                    channels=self.input_channels,
+                    dtype=np.float32,
+                    blocksize=self._device_input_frame_size,
+                    callback=self._input_callback,
+                    finished_callback=self._input_finished_callback,
+                    latency="low",
+                )
+            self.output_stream = sd.OutputStream(
+                device=self.speaker_device_id,
+                samplerate=self.device_output_sample_rate,
+                channels=self.output_channels,
+                dtype=np.float32,
+                blocksize=self._device_output_frame_size,
+                callback=self._output_callback,
+                finished_callback=self._output_finished_callback,
+                latency="low",
+            )
+            if self.input_stream is not None:
+                self.input_stream.start()
+            self.output_stream.start()
+        except Exception as e:
+            logger.error(f"重新初始化音频流失败: {e}")
+
+        # 7. 记录新绑定的默认设备名称
+        self._bound_output_name = new_name
+        logger.info(
+            f"输出已切换至系统默认设备 ({new_name!r}, "
+            f"{self.device_output_sample_rate}Hz, {self.output_channels}ch)"
+        )
+
+    async def _monitor_output_device(self):
+        """
+        后台监控系统默认输出设备变化，发现热插拔（如插入耳机）时自动切换输出路由。
+        """
+        while not self._is_closing:
+            try:
+                current = self._get_live_default_output_name()
+                if (
+                    current is not None
+                    and self._bound_output_name is not None
+                    and current != self._bound_output_name
+                ):
+                    logger.info(
+                        f"检测到系统默认输出设备变化: "
+                        f"{self._bound_output_name!r} -> {current!r}"
+                    )
+                    await self._follow_default_output()
+            except Exception as e:
+                logger.warning(f"监控输出设备变化失败: {e}")
+            await asyncio.sleep(1.5)
 
     async def clear_audio_queue(self, channel: str | None = None):
         """清空音频队列.
@@ -818,10 +1105,6 @@ class AudioCodec:
             target = "全部" if channel is None else channel
             logger.info(f"清空{target}音频队列，丢弃 {cleared_count} 帧音频数据")
 
-        if cleared_count > 100:
-            gc.collect()
-            logger.debug("执行垃圾回收以释放内存")
-
     # ============= AEC 控制方法 =============
 
     async def _cleanup_resampler(self, resampler, name: str):
@@ -854,11 +1137,35 @@ class AudioCodec:
         if not stream:
             return
         try:
-            if stream.active:
-                stream.stop()
+            # 无条件先 stop 再 close：PortAudio 对仍在运行的流直接 close 可能挂起，
+            # 而 stop() 在已停止的流上会返回 paStreamIsNotStopped 并被忽略，安全。
+            stream.stop()
+        except Exception:
+            pass
+        try:
             stream.close()
         except Exception as e:
             logger.warning(f"关闭{name}流失败: {e}")
+
+    async def _wait_stream_finished(self, wait_input: bool, wait_output: bool) -> None:
+        """
+        等待活跃音频流的 finished 回调在 PortAudio 后台线程上执行完毕。
+
+        使用线程池等待 threading.Event，避免阻塞事件循环；设超时兜底，
+        PortAudio 异常时不至于卡死关闭流程。
+        """
+        if not (wait_input or wait_output):
+            return
+        loop = asyncio.get_running_loop()
+        waits = []
+        if wait_input:
+            waits.append(loop.run_in_executor(None, self._input_finished_evt.wait, 1.0))
+        if wait_output:
+            waits.append(loop.run_in_executor(None, self._output_finished_evt.wait, 1.0))
+        try:
+            await asyncio.wait_for(asyncio.gather(*waits), timeout=2.0)
+        except Exception as e:
+            logger.debug(f"等待音频流 finished 回调结束异常: {e}")
 
     async def close(self):
         """关闭音频编解码器并释放所有资源.
@@ -878,15 +1185,33 @@ class AudioCodec:
         self._is_closing = True
         logger.info("开始关闭音频编解码器...")
 
+        # 取消输出设备热插拔监控任务
+        if self._output_monitor_task is not None:
+            self._output_monitor_task.cancel()
+            self._output_monitor_task = None
+
         try:
-            # 1. 停止音频流
+            # 1. 停止音频流（记录停止前是否活跃，用于等待 PortAudio 后台线程的
+            #    finished 回调完成，避免进程退出时与尚未结束的流回调线程竞态导致卡顿/挂起）
+            input_was_active = self.input_stream is not None and getattr(
+                self.input_stream, "active", False
+            )
+            output_was_active = self.output_stream is not None and getattr(
+                self.output_stream, "active", False
+            )
+
+            if input_was_active:
+                self._input_finished_evt.clear()
+            if output_was_active:
+                self._output_finished_evt.clear()
+
             self._stop_stream_sync(self.input_stream, "输入")
             self._stop_stream_sync(self.output_stream, "输出")
             self.input_stream = None
             self.output_stream = None
 
-            # 等待回调完全停止
-            await asyncio.sleep(0.05)
+            # 等待活跃流的 finished 回调真正执行完毕（用线程池等待，不阻塞事件循环）
+            await self._wait_stream_finished(input_was_active, output_was_active)
 
             # 2. 清空回调和监听器
             self._encoded_callback = None
