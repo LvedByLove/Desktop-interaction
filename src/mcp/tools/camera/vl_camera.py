@@ -4,9 +4,6 @@ VL camera implementation using Zhipu AI.
 
 import base64
 
-import cv2
-from openai import OpenAI
-
 from src.utils.config_manager import ConfigManager
 from src.utils.logging_config import get_logger
 
@@ -28,6 +25,10 @@ class VLCamera(BaseCamera):
         """
         super().__init__()
         config = ConfigManager.get_instance()
+
+        # 延迟导入：openai 会连带拉入 httpx 等传递依赖，部分打包产物里可能缺失。
+        # 若放在模块顶层，整个 camera 包都会导入失败，进而拖垮 MCP 工具注册与握手。
+        from openai import OpenAI
 
         # 初始化OpenAI客户端
         self.client = OpenAI(
@@ -57,6 +58,9 @@ class VLCamera(BaseCamera):
         """
         try:
             logger.info("Accessing camera...")
+
+            # 延迟导入，避免模块级依赖影响 camera 包的整体可导入性
+            import cv2
 
             # 尝试打开摄像头
             cap = cv2.VideoCapture(self.camera_index)

@@ -249,36 +249,65 @@ class McpServer:
     def add_common_tools(self):
         """
         添加通用工具.
+
+        逐组注册并彼此隔离：任何一组失败都只记录日志并跳过，既不影响其它工具组，
+        也不会因为中途抛异常而让 original_tools 永远无法恢复（曾导致缺依赖时
+        整套 MCP 工具静默消失，模型手上一个工具都没有）。
         """
         # 备份原有工具列表
         original_tools = self.tools.copy()
         self.tools.clear()
 
-        # 添加系统工具
+        groups = (
+            ("system", self._register_system_tools),
+            ("calendar", self._register_calendar_tools),
+            ("timer", self._register_timer_tools),
+            ("music", self._register_music_tools),
+            ("camera", self._register_camera_tool),
+            ("screenshot", self._register_screenshot_tool),
+            ("bazi", self._register_bazi_tools),
+        )
+
+        try:
+            for group_name, register in groups:
+                try:
+                    register()
+                except Exception as e:
+                    logger.exception(f"[MCP] 工具组 {group_name} 注册失败，已跳过: {e}")
+        finally:
+            # 恢复原有工具
+            self.tools.extend(original_tools)
+
+    def _register_system_tools(self):
+        """注册系统工具."""
         from src.mcp.tools.system import get_system_tools_manager
 
         system_manager = get_system_tools_manager()
         system_manager.init_tools(self.add_tool, PropertyList, Property, PropertyType)
 
-        # 添加日程管理工具
+    def _register_calendar_tools(self):
+        """注册日程管理工具."""
         from src.mcp.tools.calendar import get_calendar_manager
 
         calendar_manager = get_calendar_manager()
         calendar_manager.init_tools(self.add_tool, PropertyList, Property, PropertyType)
 
-        # 添加倒计时器工具
+    def _register_timer_tools(self):
+        """注册倒计时器工具."""
         from src.mcp.tools.timer import get_timer_manager
 
         timer_manager = get_timer_manager()
         timer_manager.init_tools(self.add_tool, PropertyList, Property, PropertyType)
 
-        # 添加音乐播放器工具
+    def _register_music_tools(self):
+        """注册音乐播放器工具."""
         from src.mcp.tools.music import get_music_tools_manager
 
         music_manager = get_music_tools_manager()
         music_manager.init_tools(self.add_tool, PropertyList, Property, PropertyType)
 
-        # 添加摄像头工具
+    def _register_camera_tool(self):
+        """注册拍照识图工具."""
         from src.mcp.tools.camera import take_photo
 
         # 注册take_photo工具
@@ -310,7 +339,8 @@ class McpServer:
             )
         )
 
-        # 添加桌面截图工具
+    def _register_screenshot_tool(self):
+        """注册桌面截图工具."""
         from src.mcp.tools.screenshot import take_screenshot
 
         # 注册take_screenshot工具
@@ -347,14 +377,12 @@ class McpServer:
             )
         )
 
-        # 添加八字命理工具
+    def _register_bazi_tools(self):
+        """注册八字命理工具."""
         from src.mcp.tools.bazi import get_bazi_manager
 
         bazi_manager = get_bazi_manager()
         bazi_manager.init_tools(self.add_tool, PropertyList, Property, PropertyType)
-
-        # 恢复原有工具
-        self.tools.extend(original_tools)
 
     async def parse_message(self, message: Union[str, Dict[str, Any]]):
         """
@@ -509,20 +537,29 @@ class McpServer:
     async def _parse_capabilities(self, capabilities):
         """
         解析capabilities.
+
+        注意：摄像头只是可选能力，这里绝不能向外抛异常。曾经 vl_camera 在模块顶层
+        导入 openai（传递依赖 httpx），打包产物缺 httpx 时异常从这里冒泡，导致
+        initialize 返回 error，服务端因此不再请求 tools/list，整套工具全部失效。
         """
         vision = capabilities.get("vision", {})
         if vision and isinstance(vision, dict):
             url = vision.get("url")
             token = vision.get("token")
             if url:
-                from src.mcp.tools.camera import get_camera_instance
+                try:
+                    from src.mcp.tools.camera import get_camera_instance
 
-                camera = get_camera_instance()
-                if hasattr(camera, "set_explain_url"):
-                    camera.set_explain_url(url)
-                if token and hasattr(camera, "set_explain_token"):
-                    camera.set_explain_token(token)
-                logger.info(f"Vision service configured with URL: {url}")
+                    camera = get_camera_instance()
+                    if hasattr(camera, "set_explain_url"):
+                        camera.set_explain_url(url)
+                    if token and hasattr(camera, "set_explain_token"):
+                        camera.set_explain_token(token)
+                    logger.info(f"Vision service configured with URL: {url}")
+                except Exception as e:
+                    logger.warning(
+                        f"[MCP] 视觉服务配置失败，已跳过（不影响其它工具）: {e}"
+                    )
 
     async def _reply_result(self, id: int, result: Any):
         """

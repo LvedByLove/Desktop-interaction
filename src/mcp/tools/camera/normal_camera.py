@@ -2,9 +2,6 @@
 Normal camera implementation using remote API.
 """
 
-import cv2
-import requests
-
 from src.utils.config_manager import ConfigManager
 from src.utils.logging_config import get_logger
 
@@ -61,6 +58,9 @@ class NormalCamera(BaseCamera):
         try:
             logger.info("Accessing camera...")
 
+            # 延迟导入，避免模块级依赖影响 camera 包的整体可导入性
+            import cv2
+
             # 尝试打开摄像头
             cap = cv2.VideoCapture(self.camera_index)
             if not cap.isOpened():
@@ -116,6 +116,9 @@ class NormalCamera(BaseCamera):
         """
         分析图像.
         """
+        # 延迟导入，避免模块级依赖影响 camera 包的整体可导入性
+        import requests
+
         if not self.explain_url:
             return '{"success": false, "message": "Image explain URL is not set"}'
 
