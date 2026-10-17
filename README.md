@@ -119,25 +119,9 @@
 
 ---
 
-### 1️⃣ 直接下载安装（推荐 Windows 用户）
 
-访问 GitHub Releases：
 
-```text
-https://github.com/LvedByLove/Desktop-interaction/releases
-```
-
-或直接下载安装包：
-
-```text
-https://github.com/LvedByLove/Desktop-interaction/releases/download/Installer-nuitka2.12.14/Desktop.interaction-setup-nuitka2.12.14.exe
-```
-
-双击启动安装即可使用。
-
----
-
-### 2️⃣ 源码运行（开发者）
+### 🐍 源码运行（开发者）
 
 #### 创建虚拟环境
 
