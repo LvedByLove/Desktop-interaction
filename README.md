@@ -177,9 +177,6 @@ pip install -r requirements.txt
 ```bash
 # GUI 模式（默认）
 python main.py
-
-# CLI 模式
-python main.py --mode cli
 ```
 
 ---
