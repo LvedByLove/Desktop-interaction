@@ -151,7 +151,7 @@ venv\Scripts\activate
 > Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
 > ```
 >
-> 然后再激活：
+> 然后再激活
 
 
 **macOS / Linux：**
