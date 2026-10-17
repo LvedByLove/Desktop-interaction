@@ -152,10 +152,7 @@ venv\Scripts\activate
 > ```
 >
 > 然后再激活：
->
-> ```powershell
-> .\venv\Scripts\Activate.ps1
-> ```
+
 
 **macOS / Linux：**
 
