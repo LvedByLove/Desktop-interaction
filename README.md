@@ -175,7 +175,6 @@ pip install -r requirements.txt
 #### 运行程序
 
 ```bash
-# GUI 模式（默认）
 python main.py
 ```
 
