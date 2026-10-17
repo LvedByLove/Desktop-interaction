@@ -39,9 +39,9 @@
 
 | 类型 | 项目 | 说明 |
 | :--- | :--- | :--- |
-| 原项目 | [`py-xiaozhi`](https://github.com/huangjunsen0406/py-xiaozhi) | 基础项目 |
-| 原作者 | [`huangjunsen0406`](https://github.com/huangjunsen0406) | 项目作者 |
-| 上游项目 | [`xiaozhi-esp32`](https://github.com/78/xiaozhi-esp32) | 相关上游 |
+| 上游项目 | [`py-xiaozhi`](https://github.com/huangjunsen0406/py-xiaozhi) | 基础项目 |
+| 上游项目作者 | [`huangjunsen0406`](https://github.com/huangjunsen0406) | 项目作者 |
+| 上游相关项目 | [`xiaozhi-esp32`](https://github.com/78/xiaozhi-esp32) | 相关上游 |
 | 本项目 | [`LvedByLove/Desktop-interaction`](https://github.com/LvedByLove/Desktop-interaction) | 二次开发仓库 |
 
 🙏 感谢原作者和社区提供的基础项目。没有原项目的基础工作，本项目无法完成。
