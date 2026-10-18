@@ -1,6 +1,5 @@
 import asyncio
 import re
-import tempfile
 import time
 from pathlib import Path
 from typing import Optional
@@ -10,6 +9,19 @@ from src.audio_codecs.music_decoder import MusicDecodeComplete, MusicDecodeError
 from src.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+# FFmpeg 可解码的本地音频扩展名
+AUDIO_EXTENSIONS = {
+    ".mp3",
+    ".flac",
+    ".wav",
+    ".m4a",
+    ".aac",
+    ".ogg",
+    ".opus",
+    ".wma",
+    ".ape",
+}
 
 
 class MusicPlayer:
@@ -22,9 +34,8 @@ class MusicPlayer:
         self._max_decode_recovery_attempts = 1
         self._decode_start_position = 0.0
 
-        self.cache_dir = Path(tempfile.gettempdir()) / "xiaozhi_music_cache"
-        self.temp_cache_dir = self.cache_dir / "temp"
-        self._init_cache_dirs()
+        self.music_dir = self._resolve_music_dir()
+        self._music_index_cache: Optional[dict] = None
 
         self.current_song = ""
         self.total_duration = 0
@@ -103,78 +114,115 @@ class MusicPlayer:
 
         return asyncio.create_task(coro, name=name)
 
-    def _init_cache_dirs(self):
+    def _resolve_music_dir(self) -> Path:
         """
-        初始化缓存目录.
+        确定本地音乐目录：优先读取配置，为空或无效时回退到项目根下 music/ 目录。
         """
         try:
-            self.cache_dir.mkdir(parents=True, exist_ok=True)
-            self.temp_cache_dir.mkdir(parents=True, exist_ok=True)
-            logger.info(f"音乐缓存目录初始化完成: {self.cache_dir}")
-        except Exception as e:
-            logger.error(f"创建缓存目录失败: {e}")
+            from src.utils.config_manager import ConfigManager
+            from src.utils.resource_finder import get_project_root
 
-    def _clean_temp_cache(self):
-        """
-        清理临时缓存文件.
-        """
-        try:
-            if not self.temp_cache_dir.exists():
-                return
-            for file_path in self.temp_cache_dir.glob("*"):
-                try:
-                    if file_path.is_file():
-                        file_path.unlink()
-                except Exception as e:
-                    logger.debug(f"删除临时缓存文件失败: {file_path.name}, {e}")
+            custom = ConfigManager.get_instance().get_config("MUSIC.MUSIC_DIR")
+            path = Path(custom).expanduser() if custom else (get_project_root() / "music")
+            path.mkdir(parents=True, exist_ok=True)
+            return path
         except Exception as e:
-            logger.debug(f"清理临时音乐缓存失败: {e}")
+            logger.warning(f"解析音乐目录失败，回退到项目根: {e}")
+            try:
+                from src.utils.resource_finder import get_project_root
+
+                path = get_project_root() / "music"
+                path.mkdir(parents=True, exist_ok=True)
+                return path
+            except Exception:
+                from pathlib import Path
+
+                return Path.cwd() / "music"
+
+    def _scan_music_files(self) -> dict:
+        """
+        递归扫描本地音乐目录，返回 {文件相对路径: 绝对路径} 索引（带缓存）。
+        """
+        if self._music_index_cache is not None:
+            return self._music_index_cache
+
+        index = {}
+        try:
+            for path in sorted(self.music_dir.rglob("*")):
+                if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS:
+                    rel = path.relative_to(self.music_dir).as_posix()
+                    index[rel] = path
+        except Exception as e:
+            logger.error(f"扫描本地音乐目录失败: {e}", exc_info=True)
+
+        self._music_index_cache = index
+        return index
+
+    def _resolve_song_path(self, file_id: str) -> Optional[Path]:
+        """
+        根据歌曲 id（相对路径）解析到绝对路径；支持精确匹配、顶层文件名、去扩展名匹配。
+        """
+        file_id = (file_id or "").strip()
+        if not file_id:
+            return None
+
+        index = self._scan_music_files()
+        if file_id in index:
+            return index[file_id]
+
+        target = file_id.replace("\\", "/")
+        for rel, path in index.items():
+            if rel == target or rel == target + ".mp3":
+                return path
+            if Path(rel).stem.lower() == Path(file_id).stem.lower():
+                return path
+        return None
 
     async def get_local_playlist(self, force_refresh: bool = False) -> dict:
         """
-        获取本地音乐缓存列表.
+        获取本地音乐列表.
         """
+        if force_refresh:
+            self._music_index_cache = None
         try:
-            files = sorted(self.cache_dir.glob("*.mp3"))
-            playlist = [file.stem for file in files]
+            playlist = sorted(self._scan_music_files().keys())
             return {
                 "status": "success",
-                "message": f"本地缓存中有 {len(playlist)} 首音乐",
+                "message": f"本地音乐目录中有 {len(playlist)} 首音乐",
                 "playlist": playlist,
                 "total_count": len(playlist),
             }
         except Exception as e:
-            logger.error(f"获取本地音乐缓存失败: {e}", exc_info=True)
-            return {"status": "error", "message": f"获取本地音乐缓存失败: {e}", "playlist": []}
+            logger.error(f"获取本地音乐列表失败: {e}", exc_info=True)
+            return {"status": "error", "message": f"获取本地音乐列表失败: {e}", "playlist": []}
 
     async def search_local_music(self, query: str) -> dict:
         """
-        搜索本地音乐缓存.
+        搜索本地音乐.
         """
         query = query.strip().lower()
-        playlist = await self.get_local_playlist()
-        results = [name for name in playlist.get("playlist", []) if query in name.lower()]
+        results = [name for name in sorted(self._scan_music_files().keys()) if query in name.lower()]
         return {
             "status": "success" if results else "info",
-            "message": "\n".join(results) if results else f"本地缓存中没有找到“{query}”",
+            "message": "\n".join(results) if results else f"本地音乐目录中没有找到“{query}”",
             "results": results,
             "found_count": len(results),
         }
 
     async def play_local_song_by_id(self, file_id: str) -> dict:
         """
-        根据本地缓存文件名播放歌曲.
+        根据歌曲 id（相对路径）播放本地音乐.
         """
         return await self._run_on_app_loop(lambda: self._play_local_song_by_id_impl(file_id))
 
     async def _play_local_song_by_id_impl(self, file_id: str) -> dict:
-        file_path = self.cache_dir / f"{file_id}.mp3"
-        if not file_path.exists():
+        file_path = self._resolve_song_path(file_id)
+        if not file_path:
             return {"status": "error", "message": f"本地歌曲不存在: {file_id}"}
         await self._stop_impl(clear_queue=True)
         self.current_song = file_path.stem
         self.total_duration = 0
-        self.lyrics = []
+        self.lyrics = self._load_lyrics(file_path)
         self._decode_recovery_attempts = 0
         await self._start_playback(file_path)
         return {"status": "success", "message": f"开始播放: {self.current_song}"}
@@ -210,6 +258,7 @@ class MusicPlayer:
             await self._hide_music_lyrics()
         else:
             await self._safe_update_ui(f"播放完成: {self.current_song}")
+            await self._hide_music_lyrics()
 
     async def _start_playback(self, file_path, start_position: float = 0.0) -> bool:
         """
@@ -245,19 +294,34 @@ class MusicPlayer:
 
         self._playback_task = self._create_task(self._playback_loop(), "music:playback")
         await self._start_lyric_task()
-        if not self.lyrics:
-            await self._safe_update_ui(f"正在播放: {self.current_song}")
         return True
 
     async def _start_lyric_task(self):
         await self._stop_lyric_task(hide=False)
         self.current_lyric_index = -1
         self._last_lyric_text = ""
-        if not self.lyrics:
-            return
 
+        # 无论是否有歌词，都显示音乐播放窗口；无歌词时只显示歌名并保持常驻
         await self._show_music_lyrics(f"♪ 正在播放：{self.current_song}")
-        self._lyric_task = self._create_task(self._lyric_loop(), "music:lyrics")
+        if self.lyrics:
+            self._lyric_task = self._create_task(self._lyric_loop(), "music:lyrics")
+        else:
+            self._lyric_task = self._create_task(self._song_name_keepalive_loop(), "music:keepalive")
+
+    async def _song_name_keepalive_loop(self):
+        """
+        无歌词时保持播放窗口常驻：周期性重新占用 TTS 区域显示歌名，
+        避免被 TTS 播报结束的 hide_tts 定时器隐藏。
+        """
+        text = f"♪ 正在播放：{self.current_song}"
+        try:
+            while self.is_playing:
+                await self._update_music_lyrics(text)
+                await asyncio.sleep(1.0)
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"无歌词保持显示失败: {e}", exc_info=True)
 
     async def _stop_lyric_task(self, hide: bool = True):
         current_task = asyncio.current_task()
@@ -541,6 +605,30 @@ class MusicPlayer:
             ),
         }
 
+    def _load_lyrics(self, file_path: Path) -> list:
+        """
+        从同名 .lrc 侧车文件加载歌词（支持 .lrc/.LRC，UTF-8 优先，GBK 兜底）。
+        无歌词文件或解析失败返回空列表。
+        """
+        try:
+            lrc_path = file_path.with_suffix(".lrc")
+            if not lrc_path.exists():
+                alt = file_path.with_suffix(".LRC")
+                if alt.exists():
+                    lrc_path = alt
+                else:
+                    return []
+
+            raw = lrc_path.read_bytes()
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                text = raw.decode("gbk", errors="ignore")
+            return self._parse_lyrics(text)
+        except Exception as e:
+            logger.debug(f"加载歌词失败: {file_path.name}, {e}")
+            return []
+
     def _parse_lyrics(self, lyrics_text: str):
         timed_lines = []
         plain_lines = []
@@ -629,10 +717,7 @@ class MusicPlayer:
         """
         清理资源.
         """
-        try:
-            self._clean_temp_cache()
-        except Exception:
-            pass
+        pass
 
 
 # 全局音乐播放器实例

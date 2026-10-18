@@ -55,6 +55,16 @@ class MusicToolsManager:
                 add_tool, PropertyList, Property, PropertyType
             )
 
+            # 注册搜索本地音乐工具
+            self._register_search_local_music_tool(
+                add_tool, PropertyList, Property, PropertyType
+            )
+
+            # 注册播放本地音乐工具
+            self._register_play_local_song_tool(
+                add_tool, PropertyList, Property, PropertyType
+            )
+
             self._initialized = True
             logger.info("[MusicManager] 音乐工具注册完成")
 
@@ -196,7 +206,7 @@ class MusicToolsManager:
                     playlist_text += "\n".join(playlist)
                     return playlist_text
                 else:
-                    return "本地缓存中没有音乐文件"
+                    return "本地音乐目录中还没有音乐文件"
             else:
                 return result.get("message", "获取本地歌单失败")
 
@@ -207,14 +217,71 @@ class MusicToolsManager:
         add_tool(
             (
                 "music_player.get_local_playlist",
-                "获取本地音乐歌单。显示所有已下载并缓存的歌曲。"
-                "返回格式：'歌名 - 歌手'，例如'菊花台 - 周杰伦'。"
-                "用于用户询问'我有哪些歌'、'本地歌曲列表'、'缓存了什么音乐'等场景。",
+                "获取本地音乐歌单。列出本地音乐目录（可在设置里配置路径）中的所有歌曲文件。"
+                "返回的是歌曲的相对路径名（可能包含子文件夹），例如'周杰伦/菊花台.mp3'。"
+                "用于用户询问'我有哪些歌'、'本地歌曲列表'、'本地有什么音乐'等场景。",
                 refresh_props,
                 get_local_playlist_wrapper,
             )
         )
         logger.debug("[MusicManager] 注册获取本地歌单工具成功")
+
+    def _register_search_local_music_tool(
+        self, add_tool, PropertyList, Property, PropertyType
+    ):
+        """
+        注册搜索本地音乐工具.
+        """
+
+        async def search_local_music_wrapper(args: Dict[str, Any]) -> str:
+            query = args.get("query", "")
+            result = await self._music_player.search_local_music(query)
+
+            if result.get("status") in ("success", "info"):
+                results = result.get("results", [])
+                if results:
+                    return "搜索到的本地音乐:\n" + "\n".join(results)
+                return result.get("message", "没有找到匹配的本地音乐")
+            return result.get("message", "搜索本地音乐失败")
+
+        search_props = PropertyList([Property("query", PropertyType.STRING)])
+
+        add_tool(
+            (
+                "music_player.search_local_music",
+                "在本地音乐目录中按歌名关键词搜索音乐。query 为搜索关键词。"
+                "用于用户说'搜索某首歌'、'找一下XX'、'本地有没有XX'等场景。",
+                search_props,
+                search_local_music_wrapper,
+            )
+        )
+        logger.debug("[MusicManager] 注册搜索本地音乐工具成功")
+
+    def _register_play_local_song_tool(
+        self, add_tool, PropertyList, Property, PropertyType
+    ):
+        """
+        注册播放本地音乐工具.
+        """
+
+        async def play_local_song_wrapper(args: Dict[str, Any]) -> str:
+            file_id = args.get("file_id", "")
+            result = await self._music_player.play_local_song_by_id(file_id)
+            return result.get("message", "播放失败")
+
+        play_props = PropertyList([Property("file_id", PropertyType.STRING)])
+
+        add_tool(
+            (
+                "music_player.play_local_song_by_id",
+                "播放本地音乐目录中的指定歌曲。file_id 是歌曲的相对路径标识（由 "
+                "get_local_playlist 或 search_local_music 返回，例如'周杰伦/菊花台.mp3'）。"
+                "当用户明确要求'播放某首歌'时，先确认歌单里有这首歌，再传入对应 file_id 播放。",
+                play_props,
+                play_local_song_wrapper,
+            )
+        )
+        logger.debug("[MusicManager] 注册播放本地音乐工具成功")
 
     def _format_time(self, seconds: float) -> str:
         """
