@@ -53,7 +53,7 @@
 本项目基于[`py-xiaozhi`](https://github.com/huangjunsen0406/py-xiaozhi) 项目1.1.8版本（2025/8/19）开始二次创作，也是那年我接触小智，再次感谢您让我可以有一个自己喜欢的桌面互动AI。
 相比原版，本项目主要做了以下方向的修改。
 
-### 1️⃣ 桌面悬浮交互界面优化
+### 1️⃣ 桌面悬浮交互界面
 
 <p align="center">
   <img src="https://img2024.cnblogs.com/blog/3857670/202610/3857670-20261013092034550-302858640.png" alt="Desktop-interaction 悬浮胶囊界面截图"/>
