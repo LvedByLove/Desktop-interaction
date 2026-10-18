@@ -39,9 +39,9 @@
 
 | 类型 | 项目 | 说明 |
 | :--- | :--- | :--- |
-| 上游项目 | [`py-xiaozhi`](https://github.com/huangjunsen0406/py-xiaozhi) | 基础项目 |
-| 上游项目作者 | [`huangjunsen0406`](https://github.com/huangjunsen0406) | 项目作者 |
-| 上游相关项目 | [`xiaozhi-esp32`](https://github.com/78/xiaozhi-esp32) | 相关上游 |
+| 原项目 | [`py-xiaozhi`](https://github.com/huangjunsen0406/py-xiaozhi) | 基础项目 |
+| 原作者 | [`huangjunsen0406`](https://github.com/huangjunsen0406) | 项目作者 |
+| 上游项目 | [`xiaozhi-esp32`](https://github.com/78/xiaozhi-esp32) | 相关上游 |
 | 本项目 | [`LvedByLove/Desktop-interaction`](https://github.com/LvedByLove/Desktop-interaction) | 二次开发仓库 |
 
 🙏 感谢原作者和社区提供的基础项目。没有原项目的基础工作，本项目无法完成。
@@ -50,7 +50,7 @@
 
 ## 🚀 主要改动
 
-本项目基于[`py-xiaozhi`](https://github.com/huangjunsen0406/py-xiaozhi) 项目1.1.8版本（2025/8/19）开始二次创作，也是那时我第一次接触小智，再次感谢您让我可以有一个自己喜欢的桌面互动AI。
+本项目基于[`py-xiaozhi`](https://github.com/huangjunsen0406/py-xiaozhi) 项目1.1.8版本（2025/8/19）开始二次创作，也是那段时间我接触小智，再次感谢您让我可以有一个自己喜欢的桌面互动AI。
 相比原版，本项目主要做了以下方向的修改。
 
 ### 1️⃣ 桌面悬浮交互界面优化
@@ -75,12 +75,12 @@
 - 文本输入更轻便，不打扰：输入框显示在屏幕正上方，通过点击处于[圆球]状态触发或者快捷键触发
 
 
-<s>### 3️⃣ TTS 与音乐共存优化
+<S>### 3️⃣ TTS 与音乐共存优化
 
 -  TTS 播报时不再粗暴中断音乐
 -  使用 ducking 方式降低音乐音量
 -  TTS 结束后恢复音乐音量
--  真实 TTS 与音乐歌词显示互不抢占</s>
+-  真实 TTS 与音乐歌词显示互不抢占</S>
 
 ### 4️⃣ 文件中转站
 
@@ -119,9 +119,25 @@
 
 ---
 
+### 1️⃣ 直接下载安装（推荐 Windows 用户）
 
+访问 GitHub Releases：
 
-### 🐍 源码运行（开发者）
+```text
+https://github.com/LvedByLove/Desktop-interaction/releases
+```
+
+或直接下载安装包：
+
+```text
+https://github.com/LvedByLove/Desktop-interaction/releases/download/Installer-nuitka2.12.14/Desktop.interaction-setup-nuitka2.12.14.exe
+```
+
+双击启动安装即可使用。
+
+---
+
+### 2️⃣ 源码运行（开发者）
 
 #### 创建虚拟环境
 
@@ -151,8 +167,11 @@ venv\Scripts\activate
 > Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
 > ```
 >
-> 然后再激活
-
+> 然后再激活：
+>
+> ```powershell
+> .\venv\Scripts\Activate.ps1
+> ```
 
 **macOS / Linux：**
 
@@ -175,7 +194,11 @@ pip install -r requirements.txt
 #### 运行程序
 
 ```bash
+# GUI 模式（默认）
 python main.py
+
+# CLI 模式
+python main.py --mode cli
 ```
 
 ---
