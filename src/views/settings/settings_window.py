@@ -12,6 +12,7 @@ from src.utils.resource_finder import resource_finder
 from src.views.theme import apply_settings_dialog_style
 from src.views.settings.components.audio import AudioWidget
 from src.views.settings.components.camera import CameraWidget
+from src.views.settings.components.music_cache import MusicCacheWidget
 from src.views.settings.components.shortcuts_settings import ShortcutsSettingsWidget
 from src.views.settings.components.system_options import SystemOptionsWidget
 from src.views.settings.components.wake_word import WakeWordWidget
@@ -33,6 +34,7 @@ class SettingsWindow(QDialog):
         self.camera_tab = None
         self.audio_tab = None
         self.shortcuts_tab = None
+        self.music_cache_tab = None
 
         # UI控件
         self.ui_controls = {}
@@ -137,6 +139,11 @@ class SettingsWindow(QDialog):
             self.shortcuts_tab = ShortcutsSettingsWidget()
             tab_widget.addTab(self.shortcuts_tab, "快捷键")
             self.shortcuts_tab.settings_changed.connect(self._on_settings_changed)
+
+            # 创建并添加音乐与缓存组件
+            self.music_cache_tab = MusicCacheWidget()
+            tab_widget.addTab(self.music_cache_tab, "音乐与缓存")
+            self.music_cache_tab.settings_changed.connect(self._on_settings_changed)
 
             self.logger.debug("成功添加所有组件选项卡")
 
@@ -243,6 +250,11 @@ class SettingsWindow(QDialog):
                 # 快捷键组件有自己的保存方法
                 self.shortcuts_tab.apply_settings()
 
+            # 音乐与缓存配置
+            if self.music_cache_tab:
+                music_cache_config = self.music_cache_tab.get_config_data()
+                all_config_data.update(music_cache_config)
+
             # 批量更新配置
             for config_path, value in all_config_data.items():
                 self.config_manager.update_config(config_path, value)
@@ -293,6 +305,9 @@ class SettingsWindow(QDialog):
 
             if self.shortcuts_tab:
                 self.shortcuts_tab.reset_to_defaults()
+
+            if self.music_cache_tab:
+                self.music_cache_tab.reset_to_defaults()
 
             self.logger.info("所有组件配置已重置为默认值")
 
