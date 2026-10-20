@@ -1,4 +1,4 @@
-# <img src="https://github.com/LvedByLove/Desktop-interaction/blob/main/assets/image/Redstone.png">Desktop-interaction
+# <img src="https://raw.githubusercontent.com/LvedByLove/Desktop-interaction/main/assets/image/Redstone.png" alt="Redstone" width="40" height="40"> Desktop-interaction
 
 > 桌面胶囊 · AI 助手 | 基于 [py-xiaozhi](https://github.com/huangjunsen0406/py-xiaozhi) 的桌面交互增强版小智语音客户端。
 
