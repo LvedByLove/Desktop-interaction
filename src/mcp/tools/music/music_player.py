@@ -154,7 +154,6 @@ class MusicPlayer:
         except Exception as e:
             logger.debug(f"刷新音乐目录失败: {e}")
 
-
     def _scan_music_files(self) -> dict:
         """
         递归扫描本地音乐目录，返回 {文件相对路径: 绝对路径} 索引（带缓存）。
