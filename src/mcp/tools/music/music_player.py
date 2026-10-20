@@ -139,10 +139,27 @@ class MusicPlayer:
 
                 return Path.cwd() / "music"
 
+    def _refresh_music_dir_if_changed(self):
+        """检测配置中的音乐目录是否变化，变化则更新目录并清空索引缓存."""
+        try:
+            from src.utils.config_manager import ConfigManager
+            from src.utils.resource_finder import get_project_root
+
+            custom = ConfigManager.get_instance().get_config("MUSIC.MUSIC_DIR")
+            new_dir = Path(custom).expanduser() if custom else (get_project_root() / "music")
+            if new_dir != self.music_dir:
+                self.music_dir = new_dir
+                self._music_index_cache = None
+                logger.info(f"音乐目录已更新: {new_dir}")
+        except Exception as e:
+            logger.debug(f"刷新音乐目录失败: {e}")
+
+
     def _scan_music_files(self) -> dict:
         """
         递归扫描本地音乐目录，返回 {文件相对路径: 绝对路径} 索引（带缓存）。
         """
+        self._refresh_music_dir_if_changed()
         if self._music_index_cache is not None:
             return self._music_index_cache
 
