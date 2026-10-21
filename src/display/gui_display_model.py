@@ -209,13 +209,25 @@ class GuiDisplayModel(QObject):
 
     def update_tts_reply(self, text: str):
         """
-        更新当前 TTS 回复文本（累计式流式覆盖最后一条）.
+        更新当前 TTS 回复文本.
+
+        服务器可能以两种方式下发流式文本：
+        - 累积式（每次携带增长后的全文）：新文本以当前条目为前缀，覆盖增长；
+        - 逐句式（每次携带单个句子片段）：新文本与当前条目不同，追加为新条目。
         """
         cleaned = self._clean_transcript(text)
-        if not self._tts_transcript:
-            self._tts_transcript.append(cleaned)
+        if not cleaned:
+            return
+        if self._tts_transcript:
+            prev = self._tts_transcript[-1] or ""
+            if cleaned.startswith(prev):
+                # 累积式流式：覆盖最后一条为增长后的全文
+                self._tts_transcript[-1] = cleaned
+            else:
+                # 逐句式流式：新句子追加为独立条目
+                self._tts_transcript.append(cleaned)
         else:
-            self._tts_transcript[-1] = cleaned
+            self._tts_transcript.append(cleaned)
         self.ttsTranscriptChanged.emit()
 
     def clear_tts_transcript(self):
