@@ -117,11 +117,9 @@
 
 访问 GitHub Releases：
 
-```text
 <a href="https://github.com/LvedByLove/Desktop-interaction/releases">https://github.com/LvedByLove/Desktop-interaction/releases</a>
-```
 
-双击启动安装即可使用。
+下载后双击启动安装即可使用。
 
 ---
 
