@@ -118,13 +118,7 @@
 访问 GitHub Releases：
 
 ```text
-https://github.com/LvedByLove/Desktop-interaction/releases
-```
-
-或直接下载安装包：
-
-```text
-https://github.com/LvedByLove/Desktop-interaction/releases/download/Installer-nuitka2.12.14/Desktop.interaction-setup-nuitka2.12.14.exe
+<a href="https://github.com/LvedByLove/Desktop-interaction/releases">https://github.com/LvedByLove/Desktop-interaction/releases</a>
 ```
 
 双击启动安装即可使用。
