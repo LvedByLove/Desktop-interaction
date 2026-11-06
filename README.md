@@ -35,14 +35,13 @@
 
 ## 🔗 项目来源
 
-本项目基于以下开源项目二次开发：
+本项目基于以下开源项目开发：
 
 | 类型 | 项目 | 说明 |
 | :--- | :--- | :--- |
 | 原项目 | [`py-xiaozhi`](https://github.com/huangjunsen0406/py-xiaozhi) | 基础项目 |
 | 原作者 | [`huangjunsen0406`](https://github.com/huangjunsen0406) | 项目作者 |
 | 上游项目 | [`xiaozhi-esp32`](https://github.com/78/xiaozhi-esp32) | 相关上游 |
-| 本项目 | [`LvedByLove/Desktop-interaction`](https://github.com/LvedByLove/Desktop-interaction) | 二次开发仓库 |
 
 🙏 感谢原作者和社区提供的基础项目。没有原项目的基础工作，本项目无法完成。
 
@@ -198,7 +197,7 @@ python main.py --mode cli
 -  适合希望在 PC 上体验小智语音交互、MCP 工具和桌面浮窗交互的用户
 -  定位 Windows 电脑桌面辅助人工智能
 
-本项目 **不是从零开发的独立项目**，而是在 `py-xiaozhi` 的基础上做的二次开发版本。
+本项目 **不是从零开发的独立项目**，而是在 `py-xiaozhi` 的基础上做的开发版本。
 
 如果你想要的是一个功能大而全、界面复杂的桌面 AI 客户端，它可能不是最合适的选择。  
 但如果你想要的是一颗安静待在桌面角落、叫它才出来、用完就消失的语音助手，它的设计思路会非常对味。
