@@ -187,7 +187,7 @@ python main.py --mode cli
 ```
 
 ---
-
+## 本项目使用了<a href="https://ffmpeg.org/download.html">FFmpeg</a>跨平台音视频处理框架，建议先安装<a href="https://ffmpeg.org/download.html">FFmpeg</a>并且配置path再运行
 ## 🎯 项目定位
 
 本项目更偏向于：
