@@ -1,42 +1,54 @@
-# Windows-only
-comtypes==1.4.6; sys_platform == "win32"
-pycaw==20240210; sys_platform == "win32"
+# 小智 AI 桌面客户端 —— macOS 运行依赖
+# 安装：python3 -m venv venv && source venv/bin/activate
+#       pip install -r requirements_mac.txt
+# 说明：以下为 main.py 与 src/ 实际导入的第三方库；其余传递依赖由 pip 自动解析。
+#       macOS 的音量/亮度/截图/朗读走系统自带 osascript、screencapture、say，无需额外库。
 
-# macOS-only
-applescript==2021.2.9; sys_platform == "darwin"  # macOS音量控制
-
-# 二进制/系统库敏感
+# ---- 网络 / 云端通信 ----
+aiohttp==3.12.13
+openai==1.86.0
+requests==2.32.3
+websockets==11.0.3
+paho-mqtt==2.1.0
 cryptography==44.0.1
+
+# ---- GUI ----
+PyQt5==5.15.11
+qasync==0.27.1
+
+# ---- 音频 ----
 numpy==1.26.4
 sounddevice>=0.4.4
-pygame==2.6.1
-PyQt5==5.15.11
-opencv-python-headless==4.11.0.86
 soxr==0.5.0.post1
-psutil==7.0.0
-pillow==11.3.0
-webrtcvad-wheels==2.0.14
-sherpa-onnx==1.12.8
-pendulum==3.1.0
-
-# 纯 Python 为主
-openai==1.86.0
 opuslib==3.0.1
-paho-mqtt==2.1.0
+sherpa-onnx==1.12.8
+
+# ---- 图像 / 摄像头 / 截图 ----
+opencv-python-headless==4.11.0.86
+pillow==11.3.0
+
+# ---- 通用工具 ----
+colorlog==6.9.0
+lunar_python==1.4.4
+pendulum==3.1.0
+psutil==7.0.0
+py-machineid==0.8.0
 pynput==1.8.1
 pyperclip==1.9.0
 pypinyin==0.53.0
-aiohttp==3.12.13
-websockets==11.0.3
-colorlog==6.9.0
-qasync==0.27.1
-py-machineid==0.8.0
-mutagen==1.47.0
-beautifulsoup4==4.12.3
-brotli==1.1.0
-python-dateutil==2.9.0.post0
-lunar_python==1.4.4
 tzdata
-pyinstaller==6.15.0
-rich==14.1.0
-packaging==25.0
+
+# ---- 平台相关 ----
+applescript==2021.2.9; sys_platform == "darwin"        # macOS 亮度控制
+comtypes==1.4.6; sys_platform == "win32"               # 仅 Windows 音量控制
+pycaw==20240210; sys_platform == "win32"               # 仅 Windows 音量控制
+
+# ---- 可选：scripts/ 下的开发调试脚本所需（主程序运行不需要）----
+mutagen==1.47.0
+pygame==2.6.1
+pyaudio>=0.2.14
+scipy>=1.11.0
+soundfile>=0.12.0
+
+# ---- 可选：打包发布工具（需要时取消注释）----
+# pyinstaller==6.15.0
