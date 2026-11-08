@@ -129,7 +129,7 @@
 **Windows：**
 
 ```bash
-py -m venv venv
+py -m venv .venv
 ```
 
 **macOS / Linux：**
