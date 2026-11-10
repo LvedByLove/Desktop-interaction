@@ -10,8 +10,8 @@
       "MQTT_INFO": {
         "endpoint": "api.tenclass.net",
         "client_id": "GID_test@@@00_0c_29_4d_6a_c9@@@0b70f0f0-cedf-4bcc-94ef-91e5d5c5b35d",
-        "username": "eyJpcCI6IjExNy4xMzYuMTEwLjEyMSIsImMiOjB9",
-        "password": "/xYrVs+Y2YAB0VYD3l6m/nk7U19aclsfa1tXHIKQtXA=",
+        "username": "eyJpcCI6IjExNy4xMzYuMTA4LjE0IiwiYyI6MH0=",
+        "password": "Z+mAu2DJkgRQxWJCipGF1VbaaChBvnuKNQF526mU8Go=",
         "publish_topic": "device-server",
         "subscribe_topic": "null"
       },
