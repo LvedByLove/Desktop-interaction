@@ -129,13 +129,13 @@
 **Windows：**
 
 ```bash
-py -m venv venv
+py -m venv .venv
 ```
 
 **macOS / Linux：**
 
 ```bash
-python3 -m venv venv
+python3 -m venv .venv
 ```
 
 #### 激活虚拟环境
@@ -143,7 +143,7 @@ python3 -m venv venv
 **Windows（CMD）：**
 
 ```bash
-venv\Scripts\activate
+.venv\Scripts\activate
 ```
 
 > 如果 PowerShell 报权限错误，先执行：
@@ -155,13 +155,13 @@ venv\Scripts\activate
 > 然后再激活：
 >
 > ```powershell
-> .\venv\Scripts\Activate.ps1
+> .\.venv\Scripts\Activate.ps1
 > ```
 
 **macOS / Linux：**
 
 ```bash
-source venv/bin/activate
+source .venv/bin/activate
 ```
 
 #### 升级 pip（可选，推荐）
