@@ -164,7 +164,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-### 本项目使用ffmpeg，建议下载ffmpeg效果完整
+### 本项目使用<a href="https://ffmpeg.org/download.html">ffmpeg</a>，建议下载<a href="https://ffmpeg.org/download.html">ffmpeg</a>效果完整
 
 #### 升级 pip（可选，推荐）
 
