@@ -1,0 +1,58 @@
+# 小智 AI 桌面客户端 —— Windows 运行依赖
+# 安装：venv\Scripts\python.exe -m pip install -r requirements.txt
+# 说明：以下为 main.py 与 src/ 实际导入的第三方库；其余传递依赖由 pip 自动解析。
+
+# ---- 网络 / 云端通信 ----
+aiohttp==3.14.3
+openai==1.86.0
+requests==2.32.3
+websockets==11.0.3
+paho-mqtt==2.1.0
+cryptography==50.0.2
+
+# ---- GUI ----
+PyQt5==5.15.11
+PyQt5-Qt5==5.15.2
+PyQt5_sip==12.18.0
+qasync==0.27.1
+
+# ---- 音频 ----
+numpy==2.4.4
+sounddevice==0.5.5
+soxr==0.5.0.post1
+opuslib==3.0.1
+sherpa_onnx==1.13.1
+sherpa-onnx-core==1.13.1
+
+# ---- 图像 / 摄像头 / 截图 ----
+opencv-python-headless==4.11.0.86
+pillow==11.3.0
+
+# ---- 通用工具 ----
+colorlog==6.12.0
+lunar_python==1.4.8
+pendulum==3.1.0
+psutil==7.0.0
+py-machineid==0.8.0
+pynput==1.8.1
+pyperclip==1.9.0
+pypinyin==0.53.0
+tzdata==2026.2
+
+# ---- Windows 平台相关 ----
+comtypes==1.4.17
+pycaw==20240210
+pywin32==311
+screen_brightness_control==0.27.1
+WMI==1.5.1
+
+# ---- 可选：scripts/ 下的开发调试脚本所需（主程序运行不需要）----
+mutagen==1.47.0
+pygame==2.6.1
+pyaudio>=0.2.14
+scipy>=1.11.0
+soundfile>=0.12.0
+
+# ---- 可选：打包发布工具（需要时取消注释）----
+# pyinstaller==6.15.0
+# Nuitka==4.2.1

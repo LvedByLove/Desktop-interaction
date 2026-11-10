@@ -1,0 +1,89 @@
+{
+  "SYSTEM_OPTIONS": {
+    "CLIENT_ID": "0b70f0f0-cedf-4bcc-94ef-91e5d5c5b35d",
+    "DEVICE_ID": "00:0c:29:4d:6a:c9",
+    "AUTOSTART": false,
+    "NETWORK": {
+      "OTA_VERSION_URL": "https://api.tenclass.net/xiaozhi/ota/",
+      "WEBSOCKET_URL": "wss://api.tenclass.net/xiaozhi/v1/",
+      "WEBSOCKET_ACCESS_TOKEN": "test-token",
+      "MQTT_INFO": {
+        "endpoint": "api.tenclass.net",
+        "client_id": "GID_test@@@00_0c_29_4d_6a_c9@@@0b70f0f0-cedf-4bcc-94ef-91e5d5c5b35d",
+        "username": "eyJpcCI6IjExNy4xMzYuMTEwLjEyMSIsImMiOjB9",
+        "password": "/xYrVs+Y2YAB0VYD3l6m/nk7U19aclsfa1tXHIKQtXA=",
+        "publish_topic": "device-server",
+        "subscribe_topic": "null"
+      },
+      "ACTIVATION_VERSION": "v2",
+      "AUTHORIZATION_URL": "https://xiaozhi.me/"
+    },
+    "WINDOW_SIZE_MODE": "default"
+  },
+  "WAKE_WORD_OPTIONS": {
+    "USE_WAKE_WORD": false,
+    "MODEL_PATH": "models",
+    "NUM_THREADS": 4,
+    "PROVIDER": "cpu",
+    "MAX_ACTIVE_PATHS": 2,
+    "KEYWORDS_SCORE": 1.8,
+    "KEYWORDS_THRESHOLD": 0.2,
+    "NUM_TRAILING_BLANKS": 1
+  },
+  "CAMERA": {
+    "camera_index": 0,
+    "frame_width": 640,
+    "frame_height": 480,
+    "fps": 30,
+    "Local_VL_url": "https://open.bigmodel.cn/api/paas/v4/",
+    "VLapi_key": "",
+    "models": "glm-4v-plus",
+    "explain_url": "http://api.xiaozhi.me/vision/explain",
+    "explain_token": "62326eda-ef3a-49c4-a67b-271313c213d2"
+  },
+  "SHORTCUTS": {
+    "ENABLED": true,
+    "MANUAL_PRESS": {
+      "modifier": "alt_l",
+      "key": "space",
+      "key2": "ctrl_l",
+      "description": "按住说话"
+    },
+    "ABORT": {
+      "modifier": "alt",
+      "key": "q",
+      "description": "中断对话"
+    },
+    "WINDOW_TOGGLE": {
+      "modifier": "alt",
+      "key": "w",
+      "description": "显示/隐藏窗口"
+    },
+    "MUSIC_LYRICS_TOGGLE": {
+      "modifier": "alt",
+      "key": "l",
+      "description": "显示/收起歌词"
+    }
+  },
+  "AEC_OPTIONS": {
+    "ENABLED": false,
+    "BUFFER_MAX_LENGTH": 200,
+    "FRAME_DELAY": 3,
+    "FILTER_LENGTH_RATIO": 0.4,
+    "ENABLE_PREPROCESS": true
+  },
+  "AUDIO_DEVICES": {
+    "input_device_id": 9,
+    "input_device_name": "Microphone (High Definition Audio Device)",
+    "output_device_id": null,
+    "output_device_name": "系统默认输出",
+    "output_device_pinned": false,
+    "input_sample_rate": 44100,
+    "output_sample_rate": null,
+    "input_channels": 2,
+    "output_channels": null
+  },
+  "MUSIC": {
+    "MUSIC_DIR": "C:/Users/lvedbylove/Desktop/Desktop-interaction-main/music"
+  }
+}
