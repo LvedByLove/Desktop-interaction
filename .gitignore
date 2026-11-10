@@ -31,3 +31,4 @@ dist/
 
 # 缓存与日志
 .cache/
+.log/
