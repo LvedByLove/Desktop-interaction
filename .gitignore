@@ -12,6 +12,8 @@ ENV/
 # 环境变量与密钥
 .env
 .env.*
+.config/
+*.json
 
 # IDE / 系统文件
 .vscode/
