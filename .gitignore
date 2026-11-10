@@ -1,0 +1,30 @@
+# Python 编译缓存
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虚拟环境
+.venv/
+venv/
+env/
+ENV/
+
+# 环境变量与密钥
+.env
+.env.*
+
+# IDE / 系统文件
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 测试与构建产物
+.pytest_cache/
+build/
+dist/
+*.egg-info/
+
+# 日志文件
+*.log
+.cache/
