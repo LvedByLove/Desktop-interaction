@@ -26,6 +26,9 @@ Thumbs.db
 build/
 dist/
 *.egg-info/
+installer/
+nuitka_build/
+*.bat
 
 
 # 日志文件

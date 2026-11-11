@@ -54,5 +54,5 @@ scipy>=1.11.0
 soundfile>=0.12.0
 
 # ---- 可选：打包发布工具（需要时取消注释）----
-# pyinstaller==6.15.0
-# Nuitka==4.2.1
+pyinstaller==6.15.0
+Nuitka==4.2.1
