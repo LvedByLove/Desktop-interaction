@@ -123,7 +123,7 @@
 | :--- | :--- |
 | <a href="https://www.python.org/downloads/windows/">Python</a> | 3.9+ |
 | <a href="https://ffmpeg.org/download.html">ffmpeg</a> |9.0.2（推荐版本）|
-| <a href="ms-settings:about">系统</a> | Windows 10+ / macOS 10.15+ / Linux |
+| <a href="https://ms-settings:about">系统</a> | Windows 10+ / macOS 10.15+ / Linux |
 
 > ⚠️本项目使用<a href="https://ffmpeg.org/download.html">ffmpeg</a>进行音乐编码，建议下载<a href="https://ffmpeg.org/download.html">ffmpeg</a>开发效果更完整
 #### 创建虚拟环境
