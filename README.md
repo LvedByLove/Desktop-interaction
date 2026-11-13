@@ -98,32 +98,34 @@
 - 支持文件中转站，减少窗口切换文件移动，让工具不再只是对话
 - 文字输入加强 / 输入框单独显示，让互动不再干扰
 - 支持打开网站 / 不再只打开浏览器让用户手动输入网址
+- 添加本地音乐随机播放器，音乐不停青春不止
 
 ## ⚡ 快速开始
-
-### 🧩 环境要求
-
-| 项 | 要求 |
-| :--- | :--- |
-| Python | 3.9+ |
-| 系统 | Windows 10+ / macOS 10.15+ / Linux |
 
 > ⚠️注意：本项目更偏向 Windows 桌面场景。
 
 ---
 
-### 1️⃣ 直接下载安装（推荐 Windows 用户）
+### 1️⃣ 直接下载安装（Windows 用户）
 
 访问 GitHub Releases：
 
 <a href="https://github.com/LvedByLove/Desktop-interaction/releases">https://github.com/LvedByLove/Desktop-interaction/releases</a>
 
-下载后双击启动安装即可使用。
+下载后双击启动安装即可安装使用。
 
 ---
 
 ### 2️⃣ 源码运行（开发者）
+### 🧩 环境要求
 
+| 项 | 要求 |
+| :--- | :--- |
+| <a href="https://www.python.org/downloads/windows/">Python</a> | 3.9+ |
+| <a href="https://ffmpeg.org/download.html">ffmpeg</a> |9.0.2（推荐版本）|
+| <a href="ms-settings:about">系统</a> | Windows 10+ / macOS 10.15+ / Linux |
+
+> ⚠️本项目使用<a href="https://ffmpeg.org/download.html">ffmpeg</a>进行音乐编码，建议下载<a href="https://ffmpeg.org/download.html">ffmpeg</a>开发效果更完整
 #### 创建虚拟环境
 
 **Windows：**
@@ -164,7 +166,6 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-### 本项目使用<a href="https://ffmpeg.org/download.html">ffmpeg</a>，建议下载<a href="https://ffmpeg.org/download.html">ffmpeg</a>开发效果更完整
 
 #### 升级 pip（可选，推荐）
 
