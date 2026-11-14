@@ -1,19 +1,18 @@
 """音乐与缓存设置组件."""
 
 import os
-import shutil
 from pathlib import Path
 
-from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtWidgets import (
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -22,10 +21,9 @@ from src.utils.config_manager import ConfigManager
 from src.utils.logging_config import get_logger
 from src.utils.resource_finder import (
     get_default_music_dir,
-    get_project_root,
-    get_user_cache_dir,
-    get_user_data_dir,
 )
+from src.views.components.arrow_combo_box import ArrowComboBox
+from src.views.components.password_toggle import attach_password_toggle
 
 
 class MusicCacheWidget(QWidget):
@@ -33,7 +31,11 @@ class MusicCacheWidget(QWidget):
     音乐与缓存设置组件.
     """
 
-    settings_changed = pyqtSignal()
+    settings_changed = Signal()
+
+    def _emit_settings_changed(self, *_args):
+        """兼容带参数的控件信号（PySide6 不允许把多余参数传给零参信号）."""
+        self.settings_changed.emit()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -43,6 +45,10 @@ class MusicCacheWidget(QWidget):
         self._default_music_dir_text = self._default_music_dir.as_posix()
 
         self.music_dir_edit = None
+        self.music_search_edit = None
+        self.music_api_edit = None
+        self.music_api_key_edit = None
+        self.music_quality_combo = None
 
         self._setup_ui()
         self._connect_events()
@@ -50,66 +56,102 @@ class MusicCacheWidget(QWidget):
 
     def _setup_ui(self):
         """初始化界面."""
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 18, 18, 18)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(14)
 
-        # 音乐目录
+        # 音乐目录（与数据目录页的「存储目录」保持一致）
         music_group = QGroupBox("本地音乐目录")
-        music_layout = QVBoxLayout(music_group)
-        music_layout.setSpacing(8)
+        music_layout = QFormLayout(music_group)
+        music_layout.setSpacing(10)
+        music_layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
 
         hint = QLabel(
             "把喜欢的音乐文件（mp3/flac/wav/m4a 等）放进下面这个目录，"
-            "即可通过语音让助手播放。支持子文件夹。"
+            "即可通过语音让助手播放。支持子文件夹。留空 = 默认目录。"
         )
         hint.setWordWrap(True)
-        music_layout.addWidget(hint)
+        music_layout.addRow(hint)
 
-        path_row = QHBoxLayout()
         self.music_dir_edit = QLineEdit()
         self.music_dir_edit.setPlaceholderText(self._default_music_dir_text)
-        browse_btn = QPushButton("浏览…")
-        browse_btn.setObjectName("music_dir_browse_btn")
-        path_row.addWidget(self.music_dir_edit)
-        path_row.addWidget(browse_btn)
-        music_layout.addLayout(path_row)
 
-        self._default_hint_label = QLabel()
-        self._default_hint_label.setStyleSheet("color: #86909c; font-size: 11px;")
-        music_layout.addWidget(self._default_hint_label)
+        browse_btn = QPushButton("选择")
+        browse_btn.setObjectName("music_dir_browse_btn")
+        default_btn = QPushButton("默认")
+        default_btn.setObjectName("music_dir_default_btn")
+
+        path_row = QHBoxLayout()
+        path_row.setSpacing(8)
+        path_row.addWidget(self.music_dir_edit, 1)
+        path_row.addWidget(browse_btn)
+        path_row.addWidget(default_btn)
+        music_layout.addRow(QLabel("目录路径"), path_row)
 
         layout.addWidget(music_group)
 
-        # 缓存与日志清理
-        clear_group = QGroupBox("缓存与日志")
-        clear_layout = QFormLayout(clear_group)
-        clear_layout.setSpacing(12)
+        # 在线音乐 API
+        api_group = QGroupBox("音乐 API")
+        api_layout = QFormLayout(api_group)
+        api_layout.setSpacing(10)
 
-        self._cache_btn = QPushButton("清空缓存")
-        self._cache_btn.setObjectName("clear_cache_btn")
-        clear_layout.addRow("缓存（临时解码文件等）:", self._cache_btn)
+        api_hint = QLabel(
+            "留空使用内置默认接口。搜索 API 使用酷我搜索，"
+            "直链 API 用于解析播放地址（需配合 API Key）。"
+        )
+        api_hint.setWordWrap(True)
+        api_hint.setStyleSheet("color: #6b7280; font-size: 12px;")
+        api_layout.addRow(api_hint)
 
-        self._log_btn = QPushButton("清空日志")
-        self._log_btn.setObjectName("clear_log_btn")
-        clear_layout.addRow("日志文件（app.log 及轮转文件）:", self._log_btn)
+        self.music_search_edit = QLineEdit()
+        self.music_search_edit.setPlaceholderText("留空使用默认酷我搜索 API")
+        api_layout.addRow("搜索 API:", self.music_search_edit)
 
-        layout.addWidget(clear_group)
+        self.music_api_edit = QLineEdit()
+        self.music_api_edit.setPlaceholderText("留空使用默认 lx-music-api")
+        api_layout.addRow("直链 API:", self.music_api_edit)
+
+        self.music_api_key_edit = QLineEdit()
+        self.music_api_key_edit.setPlaceholderText("留空使用默认 API Key")
+        attach_password_toggle(self.music_api_key_edit)
+        api_layout.addRow("API Key:", self.music_api_key_edit)
+
+        self.music_quality_combo = ArrowComboBox()
+        self.music_quality_combo.addItems(["320k", "128k"])
+        api_layout.addRow("默认音质:", self.music_quality_combo)
+
+        layout.addWidget(api_group)
+
         layout.addStretch()
 
     def _connect_events(self):
         """连接事件处理."""
         self.music_dir_edit.textChanged.connect(self._on_music_dir_changed)
 
+        for edit in (
+            self.music_search_edit,
+            self.music_api_edit,
+            self.music_api_key_edit,
+        ):
+            edit.textChanged.connect(self._emit_settings_changed)
+        self.music_quality_combo.currentTextChanged.connect(self._emit_settings_changed)
+
         browse_btn = self.findChild(QPushButton, "music_dir_browse_btn")
         if browse_btn:
             browse_btn.clicked.connect(self._on_browse_music_dir)
 
-        if self._cache_btn:
-            self._cache_btn.clicked.connect(self._on_clear_cache)
-
-        if self._log_btn:
-            self._log_btn.clicked.connect(self._on_clear_logs)
+        default_btn = self.findChild(QPushButton, "music_dir_default_btn")
+        if default_btn:
+            default_btn.clicked.connect(self.music_dir_edit.clear)
 
     def _load_config_values(self):
         """从配置加载值到UI控件."""
@@ -119,21 +161,27 @@ class MusicCacheWidget(QWidget):
 
             self.music_dir_edit.blockSignals(True)
             try:
+                # 默认目录留空，由占位符展示实际默认路径
                 if not music_dir or self._is_default_dir(music_dir):
-                    # 默认目录也显示出来，但用灰色文字与自定义目录区分
-                    self.music_dir_edit.setText(self._default_music_dir_text)
+                    self.music_dir_edit.clear()
                 else:
                     self.music_dir_edit.setText(music_dir)
             finally:
                 self.music_dir_edit.blockSignals(False)
 
-            self._update_default_hint()
+            music_cfg = self.config_manager.get_config("MUSIC", {}) or {}
+            self.music_search_edit.setText(str(music_cfg.get("SEARCH_URL") or ""))
+            self.music_api_edit.setText(str(music_cfg.get("URL_API") or ""))
+            self.music_api_key_edit.setText(str(music_cfg.get("URL_API_KEY") or ""))
+            quality = str(music_cfg.get("DEFAULT_QUALITY") or "320k")
+            index = self.music_quality_combo.findText(quality)
+            self.music_quality_combo.setCurrentIndex(index if index >= 0 else 0)
+
         except Exception as e:
             self.logger.error(f"加载音乐配置失败: {e}", exc_info=True)
 
     def _on_music_dir_changed(self, _text: str):
         """音乐目录文字变化时更新样式并通知配置变更."""
-        self._update_default_hint()
         self.settings_changed.emit()
 
     def _normalize_dir(self, value) -> str:
@@ -155,16 +203,6 @@ class MusicCacheWidget(QWidget):
             self._default_music_dir
         )
 
-    def _update_default_hint(self):
-        """更新默认/自定义目录的灰色提示和输入框文字颜色."""
-        current = self.music_dir_edit.text().strip()
-        is_default = self._is_default_dir(current)
-
-        if is_default:
-            self.music_dir_edit.setStyleSheet("QLineEdit { color: #86909c; }")
-        else:
-            self.music_dir_edit.setStyleSheet("")
-
     def _on_browse_music_dir(self):
         """浏览选择音乐目录."""
         current = self.music_dir_edit.text().strip()
@@ -177,103 +215,6 @@ class MusicCacheWidget(QWidget):
         if chosen:
             self.music_dir_edit.setText(chosen)
 
-    def _on_clear_cache(self):
-        """清空缓存."""
-        reply = QMessageBox.question(
-            self,
-            "清空缓存",
-            "确定要清空缓存吗？\n将删除临时解码文件等缓存内容。",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
-            return
-
-        cleared = 0
-        try:
-            targets = [
-                get_project_root() / "cache",
-                get_user_cache_dir(create=False),
-            ]
-            # 兼容旧版临时音乐缓存目录
-            import tempfile
-
-            targets.append(Path(tempfile.gettempdir()) / "xiaozhi_music_cache")
-
-            for directory in targets:
-                cleared += self._clear_dir_contents(directory)
-            self.logger.info(f"已清空缓存，删除 {cleared} 项")
-            QMessageBox.information(self, "完成", f"缓存已清空，共清理 {cleared} 项。")
-        except Exception as e:
-            self.logger.error(f"清空缓存失败: {e}", exc_info=True)
-            QMessageBox.warning(self, "错误", f"清空缓存失败: {str(e)}")
-
-    def _on_clear_logs(self):
-        """清空日志文件."""
-        reply = QMessageBox.question(
-            self,
-            "清空日志",
-            "确定要清空日志吗？\n将清空 app.log 及其轮转文件。",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
-            return
-
-        cleared = 0
-        try:
-            log_dirs = []
-            try:
-                log_dirs.append(get_user_data_dir(create=False) / "logs")
-            except Exception:
-                pass
-            try:
-                log_dirs.append(get_project_root() / "logs")
-            except Exception:
-                pass
-
-            for directory in log_dirs:
-                cleared += self._clear_log_files(directory)
-            self.logger.info(f"已清空日志，清理 {cleared} 个文件")
-            QMessageBox.information(self, "完成", f"日志已清空，共清理 {cleared} 个文件。")
-        except Exception as e:
-            self.logger.error(f"清空日志失败: {e}", exc_info=True)
-            QMessageBox.warning(self, "错误", f"清空日志失败: {str(e)}")
-
-    def _clear_dir_contents(self, directory: Path) -> int:
-        """递归删除目录下所有内容（保留目录本身），返回删除条目数。"""
-        if not directory or not directory.exists():
-            return 0
-        count = 0
-        for path in directory.iterdir():
-            try:
-                if path.is_dir() and not path.is_symlink():
-                    shutil.rmtree(path, ignore_errors=True)
-                else:
-                    path.unlink()
-                count += 1
-            except Exception as e:
-                self.logger.debug(f"删除失败: {path}, {e}")
-        return count
-
-    def _clear_log_files(self, directory: Path) -> int:
-        """清空/删除日志目录下的日志文件（当前 app.log 截断，其余删除）。"""
-        if not directory or not directory.exists():
-            return 0
-        count = 0
-        for path in directory.glob("*.log"):
-            try:
-                if path.name == "app.log":
-                    # 活动日志：截断以保持文件句柄有效
-                    with open(path, "w", encoding="utf-8"):
-                        pass
-                else:
-                    path.unlink()
-                count += 1
-            except Exception as e:
-                self.logger.debug(f"清空日志失败: {path}, {e}")
-        return count
-
     def get_config_data(self) -> dict:
         """获取当前配置数据."""
         config_data = {}
@@ -284,6 +225,14 @@ class MusicCacheWidget(QWidget):
             existing["MUSIC_DIR"] = (
                 None if self._is_default_dir(music_dir) else music_dir
             )
+            existing["SEARCH_URL"] = self.music_search_edit.text().strip() or None
+            existing["URL_API"] = self.music_api_edit.text().strip() or None
+            existing["URL_API_KEY"] = (
+                self.music_api_key_edit.text().strip() or None
+            )
+            existing["DEFAULT_QUALITY"] = (
+                self.music_quality_combo.currentText() or "320k"
+            )
             config_data["MUSIC"] = existing
         except Exception as e:
             self.logger.error(f"获取音乐配置数据失败: {e}", exc_info=True)
@@ -292,8 +241,12 @@ class MusicCacheWidget(QWidget):
     def reset_to_defaults(self):
         """重置为默认值."""
         try:
-            self.music_dir_edit.setText(self._default_music_dir_text)
-            self._update_default_hint()
+            self.music_dir_edit.clear()
+            self.music_search_edit.clear()
+            self.music_api_edit.clear()
+            self.music_api_key_edit.clear()
+            index = self.music_quality_combo.findText("320k")
+            self.music_quality_combo.setCurrentIndex(index if index >= 0 else 0)
             self.logger.info("音乐配置已重置为默认值")
         except Exception as e:
             self.logger.error(f"重置音乐配置失败: {e}", exc_info=True)

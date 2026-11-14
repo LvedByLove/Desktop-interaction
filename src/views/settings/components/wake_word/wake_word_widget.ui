@@ -30,7 +30,7 @@
       </property>
       <layout class="QVBoxLayout" name="contentLayout">
        <item>
-        <widget class="QCheckBox" name="use_wake_word_check">
+        <widget class="ToggleSwitch" name="use_wake_word_check">
          <property name="text">
           <string>启用唤醒词检测</string>
          </property>
@@ -79,7 +79,7 @@
 例如：小米小米（将自动转换为：x iǎo m ǐ x iǎo m ǐ @小米小米）</string>
             </property>
             <property name="styleSheet">
-             <string>color: #86909c; font-size: 11px;</string>
+             <string>color: #6b7280; font-size: 12px;</string>
             </property>
            </widget>
           </item>
@@ -118,6 +118,13 @@
    </item>
   </layout>
  </widget>
+ <customwidgets>
+  <customwidget>
+   <class>ToggleSwitch</class>
+   <extends>QCheckBox</extends>
+   <header>src.views.components.toggle_switch</header>
+  </customwidget>
+ </customwidgets>
  <resources/>
  <connections/>
 </ui>

@@ -1,19 +1,30 @@
 from pathlib import Path
 
-from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtWidgets import (
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
     QCheckBox,
     QFileDialog,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSlider,
+    QSpinBox,
     QTextEdit,
+    QVBoxLayout,
     QWidget,
 )
 
 from src.utils.config_manager import ConfigManager
 from src.utils.logging_config import get_logger
-from src.utils.resource_finder import get_project_root, resource_finder
+from src.utils.resource_finder import (
+    get_keywords_dir,
+    get_project_root,
+    resource_finder,
+)
 
 # 导入拼音转换库
 try:
@@ -33,7 +44,11 @@ class WakeWordWidget(QWidget):
     """
 
     # 信号定义
-    settings_changed = pyqtSignal()
+    settings_changed = Signal()
+
+    def _emit_settings_changed(self, *_args):
+        """兼容带参数的控件信号（PySide6 不允许把多余参数传给零参信号）."""
+        self.settings_changed.emit()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -42,6 +57,13 @@ class WakeWordWidget(QWidget):
 
         # UI控件引用
         self.ui_controls = {}
+
+        # 检测参数控件
+        self.num_threads_spin = None
+        self.keywords_score_slider = None
+        self.keywords_threshold_slider = None
+        self.score_value_label = None
+        self.threshold_value_label = None
 
         # 声母表（用于拼音分割）
         self.initials = [
@@ -80,13 +102,14 @@ class WakeWordWidget(QWidget):
         设置UI界面.
         """
         try:
-            from PyQt5 import uic
+            from src.utils.ui_loader import load_ui_into
 
             ui_path = Path(__file__).parent / "wake_word_widget.ui"
-            uic.loadUi(str(ui_path), self)
+            load_ui_into(ui_path, self)
 
             # 获取UI控件引用
             self._get_ui_controls()
+            self._build_detection_group()
 
         except Exception as e:
             self.logger.error(f"设置唤醒词UI失败: {e}", exc_info=True)
@@ -105,18 +128,96 @@ class WakeWordWidget(QWidget):
             }
         )
 
+    def _build_detection_group(self):
+        """构建「检测参数」分组（线程数 / 关键词得分 / 阈值）."""
+        content_layout = self.findChild(QVBoxLayout, "contentLayout")
+        if content_layout is None:
+            return
+
+        group = QGroupBox("检测参数")
+        form = QFormLayout(group)
+
+        self.num_threads_spin = QSpinBox()
+        self.num_threads_spin.setRange(1, 16)
+        self.num_threads_spin.setToolTip("建议设置为 CPU 核心数；过高会增加占用。")
+
+        # 关键词得分：0.5–3.0，内部用 5–30 的整数滑杆，步进 0.1
+        self.keywords_score_slider = QSlider(Qt.Horizontal)
+        self.keywords_score_slider.setRange(5, 30)
+        self.keywords_score_slider.setSingleStep(1)
+        self.keywords_score_slider.setPageStep(1)
+        self.keywords_score_slider.setValue(18)
+        self.keywords_score_slider.setToolTip("得分越高，唤醒判定越严格。")
+        self.score_value_label = QLabel("1.8")
+        self.score_value_label.setFixedWidth(40)
+        self.score_value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.score_value_label.setStyleSheet(
+            "color: #374151; font-size: 13px; font-weight: 600;"
+        )
+        score_row = QHBoxLayout()
+        score_row.setSpacing(8)
+        score_row.addWidget(self.keywords_score_slider, 1)
+        score_row.addWidget(self.score_value_label)
+
+        # 关键词阈值：0.00–1.00，内部用 0–100 的整数滑杆，步进 0.05
+        self.keywords_threshold_slider = QSlider(Qt.Horizontal)
+        self.keywords_threshold_slider.setRange(0, 20)
+        self.keywords_threshold_slider.setSingleStep(1)
+        self.keywords_threshold_slider.setPageStep(1)
+        self.keywords_threshold_slider.setValue(4)
+        self.keywords_threshold_slider.setToolTip(
+            "阈值越低越敏感，但误唤醒也会增多。"
+        )
+        self.threshold_value_label = QLabel("0.20")
+        self.threshold_value_label.setFixedWidth(40)
+        self.threshold_value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.threshold_value_label.setStyleSheet(
+            "color: #374151; font-size: 13px; font-weight: 600;"
+        )
+        threshold_row = QHBoxLayout()
+        threshold_row.setSpacing(8)
+        threshold_row.addWidget(self.keywords_threshold_slider, 1)
+        threshold_row.addWidget(self.threshold_value_label)
+
+        form.addRow(QLabel("线程数:"), self.num_threads_spin)
+        form.addRow(QLabel("关键词得分:"), score_row)
+        form.addRow(QLabel("关键词阈值:"), threshold_row)
+
+        hint = QLabel("得分越高越严格，阈值越低越敏感。修改后重启生效。")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #6b7280; font-size: 12px;")
+        form.addRow(hint)
+
+        self.num_threads_spin.valueChanged.connect(self._emit_settings_changed)
+        self.keywords_score_slider.valueChanged.connect(self._on_score_slider_changed)
+        self.keywords_threshold_slider.valueChanged.connect(
+            self._on_threshold_slider_changed
+        )
+
+        # 插到垂直 spacer 之前
+        insert_at = max(0, content_layout.count() - 1)
+        content_layout.insertWidget(insert_at, group)
+
+    def _on_score_slider_changed(self, value: int):
+        self.score_value_label.setText(f"{value / 10:.1f}")
+        self._emit_settings_changed()
+
+    def _on_threshold_slider_changed(self, value: int):
+        self.threshold_value_label.setText(f"{value * 0.05:.2f}")
+        self._emit_settings_changed()
+
     def _connect_events(self):
         """
         连接事件处理.
         """
         if self.ui_controls["use_wake_word_check"]:
             self.ui_controls["use_wake_word_check"].toggled.connect(
-                self.settings_changed.emit
+                self._emit_settings_changed
             )
 
         if self.ui_controls["model_path_edit"]:
             self.ui_controls["model_path_edit"].textChanged.connect(
-                self.settings_changed.emit
+                self._emit_settings_changed
             )
 
         if self.ui_controls["model_path_btn"]:
@@ -126,7 +227,7 @@ class WakeWordWidget(QWidget):
 
         if self.ui_controls["wake_words_edit"]:
             self.ui_controls["wake_words_edit"].textChanged.connect(
-                self.settings_changed.emit
+                self._emit_settings_changed
             )
 
     def _load_config_values(self):
@@ -150,6 +251,32 @@ class WakeWordWidget(QWidget):
             wake_words_text = self._load_keywords_from_file()
             if self.ui_controls["wake_words_edit"]:
                 self.ui_controls["wake_words_edit"].setPlainText(wake_words_text)
+
+            # 检测参数
+            if self.num_threads_spin is not None:
+                self.num_threads_spin.setValue(
+                    int(
+                        self.config_manager.get_config(
+                            "WAKE_WORD_OPTIONS.NUM_THREADS", 4
+                        )
+                    )
+                )
+            if self.keywords_score_slider is not None:
+                score = float(
+                    self.config_manager.get_config(
+                        "WAKE_WORD_OPTIONS.KEYWORDS_SCORE", 1.8
+                    )
+                )
+                self.keywords_score_slider.setValue(int(round(score * 10)))
+            if self.keywords_threshold_slider is not None:
+                threshold = float(
+                    self.config_manager.get_config(
+                        "WAKE_WORD_OPTIONS.KEYWORDS_THRESHOLD", 0.2
+                    )
+                )
+                self.keywords_threshold_slider.setValue(
+                    int(round(threshold * 20))
+                )
 
         except Exception as e:
             self.logger.error(f"加载唤醒词配置值失败: {e}", exc_info=True)
@@ -244,24 +371,32 @@ class WakeWordWidget(QWidget):
             self.logger.warning(f"计算相对路径时出错，使用原始路径: {e}")
             return model_path
 
+    def _resolve_keywords_file(self):
+        """关键词文件：优先唤醒词目录，回退模型目录（与运行时一致）."""
+        try:
+            user_keywords = get_keywords_dir(create=False) / "keywords.txt"
+            if user_keywords.exists():
+                return user_keywords
+        except Exception:
+            pass
+
+        model_path = self.config_manager.get_config(
+            "WAKE_WORD_OPTIONS.MODEL_PATH", "models"
+        )
+        model_dir = resource_finder.find_directory(model_path)
+        if model_dir is None:
+            return None
+        return model_dir / "keywords.txt"
+
     def _load_keywords_from_file(self) -> str:
         """
         从 keywords.txt 文件加载唤醒词，只显示中文部分.
         """
         try:
-            # 获取配置的模型路径
-            model_path = self.config_manager.get_config(
-                "WAKE_WORD_OPTIONS.MODEL_PATH", "models"
-            )
-
-            # 使用 resource_finder 统一查找（和运行时保持一致）
-            model_dir = resource_finder.find_directory(model_path)
-
-            if model_dir is None:
-                self.logger.warning(f"模型目录不存在: {model_path}")
+            keywords_file = self._resolve_keywords_file()
+            if keywords_file is None:
+                self.logger.warning("模型目录不存在，无法读取关键词")
                 return ""
-
-            keywords_file = model_dir / "keywords.txt"
 
             if not keywords_file.exists():
                 self.logger.warning(f"关键词文件不存在: {keywords_file}")
@@ -367,7 +502,12 @@ class WakeWordWidget(QWidget):
                 )
                 return
 
-            keywords_file = model_dir / "keywords.txt"
+            # 写入用户「唤醒词目录」（可在系统选项 → 数据目录中修改）。
+            # 运行时优先读取该文件，回退模型目录，兼容旧配置。
+            try:
+                keywords_file = get_keywords_dir(create=True) / "keywords.txt"
+            except Exception:
+                keywords_file = model_dir / "keywords.txt"
 
             # 处理输入的关键词文本（每行一个中文）
             lines = [line.strip() for line in keywords_text.split("\n") if line.strip()]
@@ -413,6 +553,20 @@ class WakeWordWidget(QWidget):
                 relative_path = self._convert_to_relative_path(model_path)
                 config_data["WAKE_WORD_OPTIONS.MODEL_PATH"] = relative_path
 
+            # 检测参数
+            if self.num_threads_spin is not None:
+                config_data["WAKE_WORD_OPTIONS.NUM_THREADS"] = (
+                    self.num_threads_spin.value()
+                )
+            if self.keywords_score_slider is not None:
+                config_data["WAKE_WORD_OPTIONS.KEYWORDS_SCORE"] = round(
+                    self.keywords_score_slider.value() / 10.0, 1
+                )
+            if self.keywords_threshold_slider is not None:
+                config_data["WAKE_WORD_OPTIONS.KEYWORDS_THRESHOLD"] = round(
+                    self.keywords_threshold_slider.value() * 0.05, 2
+                )
+
         except Exception as e:
             self.logger.error(f"获取唤醒词配置数据失败: {e}", exc_info=True)
 
@@ -447,6 +601,21 @@ class WakeWordWidget(QWidget):
                 # 使用默认的关键词重置
                 default_keywords = self._get_default_keywords()
                 self.ui_controls["wake_words_edit"].setPlainText(default_keywords)
+
+            if self.num_threads_spin is not None:
+                self.num_threads_spin.setValue(
+                    int(wake_word_config.get("NUM_THREADS", 4))
+                )
+            if self.keywords_score_slider is not None:
+                score = float(wake_word_config.get("KEYWORDS_SCORE", 1.8))
+                self.keywords_score_slider.setValue(int(round(score * 10)))
+            if self.keywords_threshold_slider is not None:
+                threshold = float(
+                    wake_word_config.get("KEYWORDS_THRESHOLD", 0.2)
+                )
+                self.keywords_threshold_slider.setValue(
+                    int(round(threshold * 20))
+                )
 
             self.logger.info("唤醒词配置已重置为默认值")
 

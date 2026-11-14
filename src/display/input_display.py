@@ -7,11 +7,12 @@ import asyncio
 import os
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QUrl, pyqtSignal, pyqtSlot, QObject
-from PyQt5.QtQuickWidgets import QQuickWidget
-from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt, QUrl, Signal, Slot, QObject
+from PySide6.QtQuickWidgets import QQuickWidget
+from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
 
 from src.display.gui_display_model import GuiDisplayModel
+from src.utils.qt_compat import ensure_quick_controls_style, primary_available_geometry
 
 
 class InputDisplay(QObject):
@@ -22,7 +23,7 @@ class InputDisplay(QObject):
     WINDOW_SIZE = (520, 54)
 
     # 发送文本信号
-    send_text_signal = pyqtSignal(str)
+    send_text_signal = Signal(str)
 
     def __init__(self):
         super().__init__()
@@ -76,8 +77,7 @@ class InputDisplay(QObject):
         """
         设置初始位置 - 屏幕底部居中.
         """
-        desktop = QApplication.desktop()
-        screen_rect = desktop.availableGeometry()
+        screen_rect = primary_available_geometry()
 
         # 底部居中，距离底部 20 像素
         x = (screen_rect.width() - self.WINDOW_SIZE[0]) // 2
@@ -89,6 +89,7 @@ class InputDisplay(QObject):
         """
         加载 QML 界面.
         """
+        ensure_quick_controls_style()
         self.qml_widget = QQuickWidget()
         self.qml_widget.setResizeMode(QQuickWidget.SizeRootObjectToView)
         # 设置透明背景
@@ -119,7 +120,7 @@ class InputDisplay(QObject):
             root_object.sendButtonClicked.connect(self._on_send_button_clicked)
             root_object.hideWindow.connect(self.hide)
 
-    @pyqtSlot(str)
+    @Slot(str)
     def _on_send_button_clicked(self, text):
         """
         发送按钮点击处理.

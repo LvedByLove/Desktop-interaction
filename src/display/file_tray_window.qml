@@ -1,6 +1,6 @@
-import QtQuick 2.15
-import QtQuick.Controls 2.15
-import QtQuick.Layouts 1.15
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
 
 Rectangle {
     id: root
@@ -286,7 +286,7 @@ Rectangle {
 
                 anchors.centerIn: parent
                 text: "文件 / 文件夹拖到此处"
-                font.family: "Segoe UI, Microsoft YaHei UI"
+                font.family: "Microsoft YaHei UI"
                 font.pixelSize: 10
                 color: Qt.rgba(255/255, 255/255, 255/255, 0.75)
                 opacity: 1.0
@@ -335,7 +335,7 @@ Rectangle {
 
                 Text {
                     text: "文件中转站"
-                    font.family: "Segoe UI, Microsoft YaHei UI"
+                    font.family: "Microsoft YaHei UI"
                     font.pixelSize: 12
                     font.weight: Font.DemiBold
                     color: Qt.rgba(255/255, 255/255, 255/255, 0.9)
@@ -345,7 +345,7 @@ Rectangle {
 
                 Text {
                     text: "注意：不要删除源路径上的源文件"
-                    font.family: "Segoe UI, Microsoft YaHei UI"
+                    font.family: "Microsoft YaHei UI"
                     font.pixelSize: 9
                     color: Qt.rgba(255/255, 255/255, 255/255, 0.4)
                     Layout.alignment: Qt.AlignVCenter
@@ -361,7 +361,7 @@ Rectangle {
                     Text {
                         anchors.centerIn: parent
                         text: "×"
-                        font.family: "Segoe UI, Microsoft YaHei UI"
+                        font.family: "Microsoft YaHei UI"
                         font.pixelSize: 16
                         color: Qt.rgba(255/255, 255/255, 255/255, 0.7)
                     }
@@ -382,7 +382,7 @@ Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 text: "拖动文件 / 文件夹到这里"
-                font.family: "Segoe UI, Microsoft YaHei UI"
+                font.family: "Microsoft YaHei UI"
                 font.pixelSize: 12
                 color: Qt.rgba(255/255, 255/255, 255/255, 0.4)
                 horizontalAlignment: Text.AlignHCenter
@@ -519,7 +519,7 @@ Rectangle {
                             Text {
                                 width: cellSize
                                 text: root.fileBasename(model.path)
-                                font.family: "Segoe UI, Microsoft YaHei UI"
+                                font.family: "Microsoft YaHei UI"
                                 font.pixelSize: 8
                                 color: Qt.rgba(255/255, 255/255, 255/255, 0.6)
                                 horizontalAlignment: Text.AlignHCenter

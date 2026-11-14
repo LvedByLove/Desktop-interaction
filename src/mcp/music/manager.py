@@ -35,6 +35,11 @@ class MusicToolsManager:
             # 获取音乐播放器单例实例
             self._music_player = get_music_player_instance()
 
+            # 注册在线搜索播放工具
+            self._register_search_and_play_tool(
+                add_tool, PropertyList, Property, PropertyType
+            )
+
             # 注册暂停工具
             self._register_pause_tool(add_tool, PropertyList)
 
@@ -77,6 +82,30 @@ class MusicToolsManager:
         except Exception as e:
             logger.error(f"[MusicManager] 音乐工具注册失败: {e}", exc_info=True)
             raise
+
+    def _register_search_and_play_tool(
+        self, add_tool, PropertyList, Property, PropertyType
+    ):
+        """
+        注册在线搜索并播放工具.
+        """
+
+        async def search_and_play_wrapper(args: Dict[str, Any]) -> str:
+            song_name = (args or {}).get("song_name", "")
+            result = await self._music_player.search_and_play(song_name)
+            return result.get("message", "搜索播放完成")
+
+        add_tool(
+            (
+                "music_player.search_and_play",
+                "搜索并播放指定的歌曲。根据歌名在线搜索歌曲并自动开始播放。"
+                "如果已有音乐在播放，会在新歌准备好后切换。"
+                "用于播放用户请求的特定歌曲，例如'播放周杰伦的稻香'、'听一下孤勇者'。",
+                PropertyList([Property("song_name", PropertyType.STRING)]),
+                search_and_play_wrapper,
+            )
+        )
+        logger.debug("[MusicManager] 注册在线搜索播放工具成功")
 
     def _register_pause_tool(self, add_tool, PropertyList):
         """

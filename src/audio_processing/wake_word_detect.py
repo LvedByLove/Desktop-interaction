@@ -101,7 +101,19 @@ class WakeWordDetector:
             decoder_path = self.model_dir / "decoder.onnx"
             joiner_path = self.model_dir / "joiner.onnx"
             tokens_path = self.model_dir / "tokens.txt"
+
+            # 优先使用「唤醒词目录」中的用户自定义关键词；不存在时回退模型目录。
+            # 这样设置页的数据目录覆盖真正生效，且兼容旧版本。
             keywords_path = self.model_dir / "keywords.txt"
+            try:
+                from src.utils.resource_finder import get_keywords_dir
+
+                user_keywords = get_keywords_dir(create=False) / "keywords.txt"
+                if user_keywords.exists():
+                    keywords_path = user_keywords
+                    logger.info(f"使用唤醒词目录中的关键词文件: {keywords_path}")
+            except Exception:
+                pass
 
             required_files = [
                 encoder_path,
@@ -301,9 +313,10 @@ class WakeWordDetector:
         """
         self.is_running_flag = False
 
-        # 从AudioCodec移除监听器
+        # 从AudioCodec移除监听器，并释放强引用，避免关闭后 codec/soxr 泄漏
         if self.audio_codec:
             self.audio_codec.remove_audio_listener(self)
+            self.audio_codec = None
 
         if self.detection_task:
             self.detection_task.cancel()

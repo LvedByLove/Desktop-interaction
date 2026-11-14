@@ -144,8 +144,25 @@ class AudioPlugin(Plugin):
         try:
             if self.codec:
                 await self.codec.clear_audio_queue(channel=OUTPUT_CHANNEL_TTS)
-                self.codec.set_music_ducking(True)
-                logger.debug("TTS 开始，已清空 TTS 通道并压低音乐音量")
+
+                # AEC_OPTIONS.MUSIC_PARALLEL=True：TTS 与音乐并行（压低音量）
+                # False：TTS 期间音乐静音
+                parallel = True
+                try:
+                    from src.utils.config_manager import ConfigManager
+
+                    parallel = bool(
+                        ConfigManager.get_instance().get_config(
+                            "AEC_OPTIONS.MUSIC_PARALLEL", True
+                        )
+                    )
+                except Exception:
+                    pass
+                self.codec.set_music_ducking(True, 0.25 if parallel else 0.0)
+                logger.debug(
+                    "TTS 开始，已清空 TTS 通道并%s音乐",
+                    "压低" if parallel else "静音",
+                )
         except Exception as e:
             logger.error(f"TTS 开始处理失败: {e}", exc_info=True)
 
@@ -177,6 +194,8 @@ class AudioPlugin(Plugin):
         """
         完全关闭并释放音频资源.
         """
+        logger.info("正在关闭音频插件...")
+
         # 停止音频消费者任务
         if self._audio_consumer_task and not self._audio_consumer_task.done():
             self._audio_consumer_task.cancel()
@@ -188,6 +207,7 @@ class AudioPlugin(Plugin):
         if self.codec:
             try:
                 await self.codec.close()
+                logger.info("音频编解码器已关闭")
             except Exception as e:
                 logger.error(f"关闭音频编解码器失败: {e}", exc_info=True)
             finally:
@@ -196,6 +216,8 @@ class AudioPlugin(Plugin):
         # 清空应用引用
         if self.app:
             self.app.audio_codec = None
+
+        logger.info("音频插件已关闭")
 
     # -------------------------
     # 内部：直接发送录音音频（不走队列）

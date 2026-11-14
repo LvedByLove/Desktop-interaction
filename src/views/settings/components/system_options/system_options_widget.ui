@@ -107,7 +107,7 @@
         </widget>
        </item>
        <item row="6" column="1">
-        <widget class="QComboBox" name="activation_version_combo">
+        <widget class="ArrowComboBox" name="activation_version_combo">
          <item>
           <property name="text">
            <string>v1</string>
@@ -128,7 +128,7 @@
         </widget>
        </item>
        <item row="7" column="1">
-        <widget class="QCheckBox" name="aec_enabled_check">
+        <widget class="ToggleSwitch" name="aec_enabled_check">
          <property name="text">
           <string>启用</string>
          </property>
@@ -142,7 +142,7 @@
         </widget>
        </item>
        <item row="8" column="1">
-        <widget class="QComboBox" name="window_size_combo">
+        <widget class="ArrowComboBox" name="window_size_combo">
          <item>
           <property name="text">
            <string>默认</string>
@@ -168,7 +168,7 @@
         </widget>
        </item>
        <item row="9" column="1">
-        <widget class="QCheckBox" name="autostart_check">
+        <widget class="ToggleSwitch" name="autostart_check">
          <property name="text">
           <string>启用</string>
          </property>
@@ -253,6 +253,18 @@
    </item>
   </layout>
  </widget>
+ <customwidgets>
+  <customwidget>
+   <class>ToggleSwitch</class>
+   <extends>QCheckBox</extends>
+   <header>src.views.components.toggle_switch</header>
+  </customwidget>
+  <customwidget>
+   <class>ArrowComboBox</class>
+   <extends>QComboBox</extends>
+   <header>src.views.components.arrow_combo_box</header>
+  </customwidget>
+ </customwidgets>
  <resources/>
  <connections/>
 </ui>

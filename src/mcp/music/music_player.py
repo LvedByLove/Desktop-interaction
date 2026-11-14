@@ -9,6 +9,13 @@ from src.audio_codecs.audio_channels import OUTPUT_CHANNEL_MUSIC
 from src.audio_codecs.music_decoder import MusicDecodeComplete, MusicDecodeError, MusicDecoder
 from src.utils.logging_config import get_logger
 
+from .online import (
+    download_song,
+    fetch_lyrics_and_save,
+    load_music_config,
+    search_song,
+)
+
 logger = get_logger(__name__)
 
 # FFmpeg 可解码的本地音频扩展名
@@ -69,33 +76,33 @@ class MusicPlayer:
         self._track_end_event: Optional[asyncio.Event] = None
 
         self.app = None
-        self.audio_codec = None
         self._initialize_app_reference()
 
         logger.info("音乐播放器已启用本地播放模式")
 
     def _initialize_app_reference(self):
         """
-        初始化应用程序引用和 AudioCodec.
+        初始化应用程序引用.
+
+        注意：不缓存 AudioCodec 强引用。关闭时 Application 会释放 codec，
+        如果这里继续持有引用，soxr 等扩展对象可能无法及时释放。
         """
         try:
             from src.application import Application
 
             self.app = Application.get_instance()
-            self.audio_codec = getattr(self.app, "audio_codec", None)
-
-            if not self.audio_codec:
-                logger.warning("AudioCodec 未初始化，音乐播放可能不可用")
-
         except Exception as e:
             logger.warning(f"获取Application实例失败: {e}")
             self.app = None
 
     def _ensure_audio_codec(self):
-        if self.audio_codec:
-            return self.audio_codec
-        self._initialize_app_reference()
-        return self.audio_codec
+        """每次从 Application 取当前 codec，避免持有过期的强引用."""
+        if not self.app:
+            self._initialize_app_reference()
+        codec = getattr(self.app, "audio_codec", None) if self.app else None
+        if codec is None:
+            logger.warning("AudioCodec 未初始化，音乐播放可能不可用")
+        return codec
 
     async def _run_on_app_loop(self, coro_factory):
         """
@@ -323,6 +330,52 @@ class MusicPlayer:
             self.lyrics = []
             return {"status": "error", "message": f"播放失败: {file_path.name}"}
         return {"status": "success", "message": f"开始播放: {self.current_song}"}
+
+    async def search_and_play(self, song_name: str) -> dict:
+        """
+        在线搜索并播放指定歌曲（下载到音乐缓存目录后播放）.
+        """
+        return await self._run_on_app_loop(
+            lambda: self._search_and_play_impl(song_name)
+        )
+
+    async def _search_and_play_impl(self, song_name: str) -> dict:
+        song_name = (song_name or "").strip()
+        if not song_name:
+            return {"status": "error", "message": "请提供歌曲名称"}
+
+        config = load_music_config()
+        hit = await search_song(song_name, config)
+        if hit is None:
+            return {"status": "error", "message": f"未找到歌曲: {song_name}"}
+
+        logger.info("准备播放在线歌曲: %s", hit.display_name)
+        path, error = await download_song(hit, config)
+        if path is None:
+            return {
+                "status": "error",
+                "message": error or f"播放失败: {hit.display_name}",
+            }
+
+        # 下载完成后再停掉当前歌曲，避免搜索/下载期间打断正在播放的音乐
+        await fetch_lyrics_and_save(hit.song_id, path, config)
+        await self._disable_shuffle()
+        await self._stop_impl(clear_queue=True)
+
+        self.current_song = hit.display_name
+        self.total_duration = float(hit.duration or 0)
+        self.lyrics = self._load_lyrics(path)
+        self._decode_recovery_attempts = 0
+
+        if not await self._start_playback(path):
+            self.current_song = ""
+            self.lyrics = []
+            return {"status": "error", "message": f"播放失败: {hit.display_name}"}
+
+        return {
+            "status": "success",
+            "message": f"正在播放: {hit.display_name}",
+        }
 
     async def play_random_local_song(self) -> dict:
         """

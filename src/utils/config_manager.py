@@ -1,9 +1,17 @@
+import copy
 import json
 import uuid
 from typing import Any, Dict
 
 from src.utils.logging_config import get_logger
-from src.utils.resource_finder import resource_finder
+from src.utils.resource_finder import (
+    apply_path_overrides_from_config,
+    get_keywords_dir,
+    get_music_cache_dir,
+    get_user_cache_dir,
+    get_user_log_dir,
+    resource_finder,
+)
 
 logger = get_logger(__name__)
 
@@ -58,14 +66,14 @@ class ConfigManager:
                 "key2": "ctrl_l",
                 "description": "按住说话",
             },
-            "ABORT": {"modifier": "alt", "key": "q", "description": "中断对话"},
+            "ABORT": {"modifier": "alt_l", "key": "q", "description": "中断对话"},
             "WINDOW_TOGGLE": {
-                "modifier": "alt",
+                "modifier": "alt_l",
                 "key": "w",
                 "description": "显示/隐藏窗口",
             },
             "MUSIC_LYRICS_TOGGLE": {
-                "modifier": "alt",
+                "modifier": "alt_l",
                 "key": "l",
                 "description": "显示/收起歌词",
             },
@@ -76,6 +84,9 @@ class ConfigManager:
             "FRAME_DELAY": 3,
             "FILTER_LENGTH_RATIO": 0.4,
             "ENABLE_PREPROCESS": True,
+            # True: TTS 播放时音乐闪避（压低音量）继续播放
+            # False: TTS 播放期间音乐静音
+            "MUSIC_PARALLEL": True,
         },
         "AUDIO_DEVICES": {
             "input_device_id": None,
@@ -91,6 +102,34 @@ class ConfigManager:
         "MUSIC": {
             # 为空时使用默认音乐目录（用户音乐目录下的 music 子目录）
             "MUSIC_DIR": None,
+            # 在线音乐 API（留空使用内置默认值）
+            "SEARCH_URL": None,
+            "URL_API": None,
+            "URL_API_KEY": None,
+            "LYRICS_URL": None,
+            "DEFAULT_QUALITY": "320k",
+        },
+        # 可写目录覆盖（None/空 = 使用系统默认；下次启动生效并迁移旧内容）
+        "PATHS": {
+            "CACHE_DIR": None,
+            "LOG_DIR": None,
+            "MUSIC_CACHE_DIR": None,
+            "KEYWORDS_DIR": None,
+        },
+        # 外部 MCP 插件目录（None = 用户数据目录下 mcp_plugins）
+        "MCP_PLUGINS": {
+            "DIR": None,
+        },
+        # 用户在设置页禁用的 MCP 工具名（下次启动生效）
+        "MCP_TOOLS": {
+            "DISABLED": [],
+        },
+        # 文件操作 MCP 工具：默认关闭，只允许用户主目录
+        "MCP_FILE_TOOLS": {
+            "ENABLED": False,  # 默认不注册文件工具
+            "ROOT": None,  # None = 当前用户主目录
+            "MAX_BYTES": 1048576,  # 单次读写内容上限 1 MiB
+            "BACKUP_ON_OVERWRITE": True,  # 覆盖已有文件前生成 .bak
         },
     }
 
@@ -114,11 +153,18 @@ class ConfigManager:
         # 初始化配置文件路径
         self._init_config_paths()
 
+        # 加载配置（必须先读配置，才知道 PATHS 覆盖项）
+        self._config = self._load_config()
+
+        # 应用 PATHS 目录覆盖并迁移旧内容。
+        # 必须早于日志/缓存/音乐目录的首次写入，因此 setup_logging 会先创建本单例。
+        try:
+            apply_path_overrides_from_config(self, migrate=True)
+        except Exception as e:
+            logger.warning(f"应用可写目录覆盖失败，继续使用默认路径: {e}", exc_info=True)
+
         # 确保必要的目录存在
         self._ensure_required_directories()
-
-        # 加载配置
-        self._config = self._load_config()
 
     def _init_config_paths(self):
         """
@@ -151,11 +197,18 @@ class ConfigManager:
             models_dir.mkdir(parents=True, exist_ok=True)
             logger.info(f"创建模型目录: {models_dir.absolute()}")
 
-        # 创建 cache 目录
-        cache_dir = project_root / "cache"
-        if not cache_dir.exists():
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            logger.info(f"创建缓存目录: {cache_dir.absolute()}")
+        # 创建可写目录（遵循 PATHS 覆盖）
+        for label, getter in (
+            ("缓存", get_user_cache_dir),
+            ("日志", get_user_log_dir),
+            ("音乐缓存", get_music_cache_dir),
+            ("唤醒词", get_keywords_dir),
+        ):
+            try:
+                directory = getter(create=True)
+                logger.debug(f"可写目录({label}): {directory}")
+            except Exception as e:
+                logger.warning(f"创建{label}目录失败: {e}")
 
     def _load_config(self) -> Dict[str, Any]:
         """
@@ -233,6 +286,10 @@ class ConfigManager:
             return value
         except (KeyError, TypeError):
             return default
+
+    def snapshot(self) -> Dict[str, Any]:
+        """返回当前配置的深拷贝，用于比较保存前后的变化."""
+        return copy.deepcopy(self._config)
 
     def update_config(self, path: str, value: Any) -> bool:
         """

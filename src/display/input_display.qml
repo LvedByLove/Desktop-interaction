@@ -1,6 +1,6 @@
-import QtQuick 2.15
-import QtQuick.Controls 2.15
-import QtQuick.Layouts 1.15
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
 
 // 输入状态显示窗口 - 独立的顶层窗口
 Rectangle {
@@ -47,7 +47,7 @@ Rectangle {
                 objectName: "textInput"
                 anchors.fill: parent
                 verticalAlignment: TextInput.AlignVCenter
-                font.family: "Segoe UI, Microsoft YaHei UI"
+                font.family: "Microsoft YaHei UI"
                 font.pixelSize: 15
                 color: "white"
                 selectedTextColor: "white"
@@ -63,7 +63,7 @@ Rectangle {
             Text {
                 anchors.fill: parent
                 text: "输入文字和小智对话..."
-                font.family: "Segoe UI, Microsoft YaHei UI"
+                font.family: "Microsoft YaHei UI"
                 font.pixelSize: 15
                 color: Qt.rgba(255/255, 255/255, 255/255, 0.42)
                 verticalAlignment: Text.AlignVCenter
@@ -84,7 +84,7 @@ Rectangle {
             }
             contentItem: Text {
                 text: sendBtn.text
-                font.family: "Segoe UI, Microsoft YaHei UI"
+                font.family: "Microsoft YaHei UI"
                 font.pixelSize: 14
                 font.weight: Font.Medium
                 color: sendBtn.enabled ? "white" : Qt.rgba(255/255, 255/255, 255/255, 0.35)

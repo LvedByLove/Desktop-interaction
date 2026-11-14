@@ -93,18 +93,32 @@ class AECProcessor:
             # 创建配置
             self.apm_config = create_default_config()
 
+            # 读取设置页的 AEC 高级参数
+            frame_delay = 3
+            enable_preprocess = True
+            try:
+                from src.utils.config_manager import ConfigManager
+
+                cm = ConfigManager.get_instance()
+                frame_delay = int(cm.get_config("AEC_OPTIONS.FRAME_DELAY", 3))
+                enable_preprocess = bool(
+                    cm.get_config("AEC_OPTIONS.ENABLE_PREPROCESS", True)
+                )
+            except Exception:
+                pass
+
             # 启用回声消除
             self.apm_config.echo.enabled = True
             self.apm_config.echo.mobile_mode = False
             self.apm_config.echo.enforce_high_pass_filtering = True
 
             # 启用噪声抑制
-            self.apm_config.noise_suppress.enabled = True
+            self.apm_config.noise_suppress.enabled = enable_preprocess
             self.apm_config.noise_suppress.noise_level = 2  # HIGH
 
             # 启用高通滤波器
-            self.apm_config.high_pass.enabled = True
-            self.apm_config.high_pass.apply_in_full_band = True
+            self.apm_config.high_pass.enabled = enable_preprocess
+            self.apm_config.high_pass.apply_in_full_band = enable_preprocess
 
             # 应用配置
             result = self.apm.apply_config(self.apm_config)
@@ -118,8 +132,12 @@ class AECProcessor:
             self.capture_config = self.apm.create_stream_config(sample_rate, channels)
             self.render_config = self.apm.create_stream_config(sample_rate, channels)
 
-            # 设置流延迟
-            self.apm.set_stream_delay_ms(40)  # 50ms延迟
+            # 设置流延迟：40ms + N × 协议帧长
+            stream_delay_ms = 40 + max(0, frame_delay) * int(
+                getattr(AudioConfig, "FRAME_DURATION", 60)
+            )
+            self.apm.set_stream_delay_ms(stream_delay_ms)
+            logger.info(f"WebRTC APM 延迟补偿: {stream_delay_ms}ms")
 
             logger.info("WebRTC APM初始化完成")
 

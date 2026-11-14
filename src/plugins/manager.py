@@ -1,6 +1,11 @@
+import asyncio
 from typing import Any, List
 
+from src.utils.logging_config import get_logger
+
 from .base import Plugin
+
+logger = get_logger(__name__)
 
 
 class PluginManager:
@@ -80,14 +85,22 @@ class PluginManager:
     async def stop_all(self) -> None:
         # 逆序更稳妥
         for p in reversed(self._plugins):
+            name = getattr(p, "name", p.__class__.__name__)
             try:
                 await p.stop()
-            except Exception:
-                pass
+            except asyncio.CancelledError:
+                # 某个插件在停止自己的后台任务时抛出取消异常，不应中断其它插件
+                logger.warning(f"停止插件 {name} 时收到取消异常，继续关闭")
+            except Exception as e:
+                logger.warning(f"停止插件 {name} 失败: {e}")
 
     async def shutdown_all(self) -> None:
         for p in reversed(self._plugins):
+            name = getattr(p, "name", p.__class__.__name__)
+            logger.debug(f"关闭插件: {name}")
             try:
                 await p.shutdown()
-            except Exception:
-                pass
+            except asyncio.CancelledError:
+                logger.warning(f"关闭插件 {name} 时收到取消异常，继续关闭")
+            except Exception as e:
+                logger.warning(f"关闭插件 {name} 失败: {e}")

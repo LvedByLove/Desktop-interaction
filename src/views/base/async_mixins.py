@@ -5,7 +5,7 @@
 
 import asyncio
 
-from PyQt5.QtCore import QObject, pyqtSignal
+from PySide6.QtCore import QObject, Signal
 
 from src.utils.logging_config import get_logger
 
@@ -62,10 +62,10 @@ class AsyncSignalEmitter(QObject):
     """
 
     # 定义通用信号
-    data_ready = pyqtSignal(object)
-    error_occurred = pyqtSignal(str)
-    progress_updated = pyqtSignal(int)
-    status_changed = pyqtSignal(str)
+    data_ready = Signal(object)
+    error_occurred = Signal(str)
+    progress_updated = Signal(int)
+    status_changed = Signal(str)
 
     def __init__(self):
         super().__init__()

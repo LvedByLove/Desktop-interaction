@@ -8,9 +8,9 @@
 import ctypes
 
 from PIL import Image, ImageGrab
-from PyQt5.QtCore import QPoint, QRect, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QImage, QPainter, QPen, QPixmap
-from PyQt5.QtWidgets import QWidget
+from PySide6.QtCore import QPoint, QRect, Qt, Signal
+from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
+from PySide6.QtWidgets import QWidget
 
 from src.utils.logging_config import get_logger
 
@@ -23,7 +23,7 @@ class RegionCaptureOverlay(QWidget):
     """
 
     # 选区完成（rect 为 None 表示取消）
-    _selection_done = pyqtSignal(object)
+    _selection_done = Signal(object)
 
     def __init__(self, background: Image.Image):
         super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)

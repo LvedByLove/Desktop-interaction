@@ -3,7 +3,7 @@
 GUI 显示窗口数据模型 - 用于 QML 数据绑定.
 """
 
-from PyQt5.QtCore import QObject, pyqtProperty, pyqtSignal
+from PySide6.QtCore import QObject, Property, Signal
 
 
 class GuiDisplayModel(QObject):
@@ -12,24 +12,24 @@ class GuiDisplayModel(QObject):
     """
 
     # 属性变化信号
-    statusTextChanged = pyqtSignal()
-    emotionPathChanged = pyqtSignal()
-    ttsTextChanged = pyqtSignal()
-    ttsVisibleChanged = pyqtSignal()
-    ttsTranscriptChanged = pyqtSignal()
-    musicLyricsActiveChanged = pyqtSignal()
-    musicLyricsCollapsedChanged = pyqtSignal()
-    buttonTextChanged = pyqtSignal()
-    modeTextChanged = pyqtSignal()
-    autoModeChanged = pyqtSignal()
+    statusTextChanged = Signal()
+    emotionPathChanged = Signal()
+    ttsTextChanged = Signal()
+    ttsVisibleChanged = Signal()
+    ttsTranscriptChanged = Signal()
+    musicLyricsActiveChanged = Signal()
+    musicLyricsCollapsedChanged = Signal()
+    buttonTextChanged = Signal()
+    modeTextChanged = Signal()
+    autoModeChanged = Signal()
 
     # 用户操作信号
-    manualButtonPressed = pyqtSignal()
-    manualButtonReleased = pyqtSignal()
-    autoButtonClicked = pyqtSignal()
-    abortButtonClicked = pyqtSignal()
-    modeButtonClicked = pyqtSignal()
-    sendButtonClicked = pyqtSignal(str)  # 携带输入的文本
+    manualButtonPressed = Signal()
+    manualButtonReleased = Signal()
+    autoButtonClicked = Signal()
+    abortButtonClicked = Signal()
+    modeButtonClicked = Signal()
+    sendButtonClicked = Signal(str)  # 携带输入的文本
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -48,7 +48,7 @@ class GuiDisplayModel(QObject):
         self._is_connected = False
 
     # 状态文本属性
-    @pyqtProperty(str, notify=statusTextChanged)
+    @Property(str, notify=statusTextChanged)
     def statusText(self):
         return self._status_text
 
@@ -59,7 +59,7 @@ class GuiDisplayModel(QObject):
             self.statusTextChanged.emit()
 
     # 表情路径属性
-    @pyqtProperty(str, notify=emotionPathChanged)
+    @Property(str, notify=emotionPathChanged)
     def emotionPath(self):
         return self._emotion_path
 
@@ -70,7 +70,7 @@ class GuiDisplayModel(QObject):
             self.emotionPathChanged.emit()
 
     # TTS 文本属性
-    @pyqtProperty(str, notify=ttsTextChanged)
+    @Property(str, notify=ttsTextChanged)
     def ttsText(self):
         return self._tts_text
 
@@ -81,7 +81,7 @@ class GuiDisplayModel(QObject):
             self.ttsTextChanged.emit()
 
     # TTS 会话累计文本属性（大胶囊内显示整段对话文本）
-    @pyqtProperty(str, notify=ttsTranscriptChanged)
+    @Property(str, notify=ttsTranscriptChanged)
     def ttsTranscript(self):
         return "\n\n".join(t for t in self._tts_transcript if t)
 
@@ -93,7 +93,7 @@ class GuiDisplayModel(QObject):
             self.ttsTranscriptChanged.emit()
 
     # TTS 可见性属性
-    @pyqtProperty(bool, notify=ttsVisibleChanged)
+    @Property(bool, notify=ttsVisibleChanged)
     def ttsVisible(self):
         return self._tts_visible
 
@@ -104,7 +104,7 @@ class GuiDisplayModel(QObject):
             self.ttsVisibleChanged.emit()
 
     # 音乐歌词状态属性
-    @pyqtProperty(bool, notify=musicLyricsActiveChanged)
+    @Property(bool, notify=musicLyricsActiveChanged)
     def musicLyricsActive(self):
         return self._music_lyrics_active
 
@@ -115,7 +115,7 @@ class GuiDisplayModel(QObject):
             self._music_lyrics_active = value
             self.musicLyricsActiveChanged.emit()
 
-    @pyqtProperty(bool, notify=musicLyricsCollapsedChanged)
+    @Property(bool, notify=musicLyricsCollapsedChanged)
     def musicLyricsCollapsed(self):
         return self._music_lyrics_collapsed
 
@@ -127,7 +127,7 @@ class GuiDisplayModel(QObject):
             self.musicLyricsCollapsedChanged.emit()
 
     # 自动模式按钮文本属性
-    @pyqtProperty(str, notify=buttonTextChanged)
+    @Property(str, notify=buttonTextChanged)
     def buttonText(self):
         return self._button_text
 
@@ -138,7 +138,7 @@ class GuiDisplayModel(QObject):
             self.buttonTextChanged.emit()
 
     # 模式切换按钮文本属性
-    @pyqtProperty(str, notify=modeTextChanged)
+    @Property(str, notify=modeTextChanged)
     def modeText(self):
         return self._mode_text
 
@@ -149,7 +149,7 @@ class GuiDisplayModel(QObject):
             self.modeTextChanged.emit()
 
     # 自动模式标志属性
-    @pyqtProperty(bool, notify=autoModeChanged)
+    @Property(bool, notify=autoModeChanged)
     def autoMode(self):
         return self._auto_mode
 

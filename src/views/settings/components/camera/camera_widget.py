@@ -1,9 +1,9 @@
 from pathlib import Path
 
 import cv2
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QImage, QPixmap
-from PyQt5.QtWidgets import (
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QLabel,
@@ -19,6 +19,7 @@ from PyQt5.QtWidgets import (
 
 from src.utils.config_manager import ConfigManager
 from src.utils.logging_config import get_logger
+from src.views.components.password_toggle import attach_password_toggle
 from src.views.theme import apply_settings_dialog_style
 
 
@@ -28,7 +29,11 @@ class CameraWidget(QWidget):
     """
 
     # 信号定义
-    settings_changed = pyqtSignal()
+    settings_changed = Signal()
+
+    def _emit_settings_changed(self, *_args):
+        """兼容带参数的控件信号（PySide6 不允许把多余参数传给零参信号）."""
+        self.settings_changed.emit()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -54,13 +59,16 @@ class CameraWidget(QWidget):
         设置UI界面.
         """
         try:
-            from PyQt5 import uic
+            from src.utils.ui_loader import load_ui_into
 
             ui_path = Path(__file__).parent / "camera_widget.ui"
-            uic.loadUi(str(ui_path), self)
+            load_ui_into(ui_path, self)
 
             # 获取UI控件引用
             self._get_ui_controls()
+
+            # VL API Key 支持显示/隐藏
+            attach_password_toggle(self.ui_controls.get("vl_api_key_edit"))
 
         except Exception as e:
             self.logger.error(f"设置摄像头UI失败: {e}", exc_info=True)
@@ -94,13 +102,13 @@ class CameraWidget(QWidget):
         # 为所有输入控件连接变更信号
         for control in self.ui_controls.values():
             if isinstance(control, QLineEdit):
-                control.textChanged.connect(self.settings_changed.emit)
+                control.textChanged.connect(self._emit_settings_changed)
             elif isinstance(control, QSpinBox):
                 if control == self.ui_controls.get("camera_index_spin"):
                     # 摄像头索引变化时，自动更新预览
                     control.valueChanged.connect(self._on_camera_index_changed)
                 else:
-                    control.valueChanged.connect(self.settings_changed.emit)
+                    control.valueChanged.connect(self._emit_settings_changed)
             elif isinstance(control, QPushButton):
                 continue
 
@@ -304,7 +312,7 @@ class CameraWidget(QWidget):
             layout.addWidget(button_box)
 
             # 显示对话框
-            if dialog.exec_() == QDialog.Accepted:
+            if dialog.exec() == QDialog.Accepted:
                 current_item = camera_list.currentItem()
                 if current_item:
                     return current_item.data(Qt.UserRole)

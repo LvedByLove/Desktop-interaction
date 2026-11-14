@@ -1,12 +1,9 @@
-from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtWidgets import (
-    QCheckBox,
-    QComboBox,
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import (
     QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -14,6 +11,8 @@ from PyQt5.QtWidgets import (
 
 from src.utils.config_manager import ConfigManager
 from src.utils.logging_config import get_logger
+from src.views.components.arrow_combo_box import ArrowComboBox
+from src.views.components.toggle_switch import ToggleSwitch
 
 logger = get_logger(__name__)
 
@@ -24,10 +23,11 @@ class ShortcutsSettingsWidget(QWidget):
     """
 
     # 信号定义
-    settings_changed = pyqtSignal()
+    settings_changed = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, embedded: bool = False):
         super().__init__(parent)
+        self.embedded = embedded
         self.config = ConfigManager.get_instance()
         self.shortcuts_config = self.config.get_config("SHORTCUTS", {})
         self.init_ui()
@@ -36,16 +36,11 @@ class ShortcutsSettingsWidget(QWidget):
         """
         初始化UI.
 
-        页面内容较多，放进 QScrollArea，窗口较小时自动出现纵向滚动条；
-        底部“恢复默认 / 应用”按钮固定，不随内容滚动。
+        embedded=True 时直接作为区块嵌入系统选项页，不再自带滚动区。
         """
         outer_layout = QVBoxLayout(self)
-        outer_layout.setContentsMargins(9, 9, 9, 9)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
         outer_layout.setSpacing(10)
-
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setFrameShape(QFrame.NoFrame)
 
         content = QWidget()
         layout = QVBoxLayout(content)
@@ -53,14 +48,18 @@ class ShortcutsSettingsWidget(QWidget):
         layout.setSpacing(10)
 
         # 启用快捷键选项
-        self.enable_checkbox = QCheckBox("启用全局快捷键")
+        self.enable_checkbox = ToggleSwitch("启用全局快捷键")
         self.enable_checkbox.setChecked(self.shortcuts_config.get("ENABLED", True))
         self.enable_checkbox.toggled.connect(self.on_settings_changed)
         layout.addWidget(self.enable_checkbox)
 
-        # 快捷键配置组
-        shortcuts_group = QGroupBox("快捷键配置")
-        shortcuts_layout = QVBoxLayout()
+        # 快捷键配置组（嵌入时用普通容器，避免出现两个“快捷键”标题）
+        if self.embedded:
+            shortcuts_group = QWidget()
+            shortcuts_layout = QVBoxLayout(shortcuts_group)
+        else:
+            shortcuts_group = QGroupBox("快捷键配置")
+            shortcuts_layout = QVBoxLayout()
         shortcuts_layout.setSpacing(10)
 
         # 创建各个快捷键配置控件
@@ -97,55 +96,58 @@ class ShortcutsSettingsWidget(QWidget):
             self.shortcut_widgets["MUSIC_LYRICS_TOGGLE"]
         )
 
-        shortcuts_group.setLayout(shortcuts_layout)
+        if not self.embedded:
+            shortcuts_group.setLayout(shortcuts_layout)
         layout.addWidget(shortcuts_group)
-        layout.addStretch(1)
 
-        scroll_area.setWidget(content)
-        outer_layout.addWidget(scroll_area, 1)
+        if self.embedded:
+            outer_layout.addWidget(content, 1)
+        else:
+            layout.addStretch(1)
+            scroll_area = QScrollArea()
+            scroll_area.setWidgetResizable(True)
+            scroll_area.setFrameShape(QFrame.NoFrame)
+            scroll_area.setWidget(content)
+            outer_layout.addWidget(scroll_area, 1)
 
-        # 按钮区域（固定在底部，不随内容滚动）
-        btn_layout = QHBoxLayout()
-        self.reset_btn = QPushButton("恢复默认")
-        self.reset_btn.clicked.connect(self.reset_to_defaults)
-        btn_layout.addWidget(self.reset_btn)
 
-        self.apply_btn = QPushButton("应用")
-        self.apply_btn.clicked.connect(self.apply_settings)
-        btn_layout.addWidget(self.apply_btn)
-
-        outer_layout.addLayout(btn_layout)
-
-    # 按住说话使用的修饰键选项：(显示文本, 存储值)
-    # 存储值 ctrl_l/ctrl_r 等表示区分左右；ctrl/alt/shift 表示任意一侧
+    # 所有快捷键统一只允许这些修饰键：(显示文本, 存储值)
     MODIFIER_OPTIONS = [
         ("左 Ctrl", "ctrl_l"),
         ("右 Ctrl", "ctrl_r"),
-        ("Ctrl（任意）", "ctrl"),
         ("左 Alt", "alt_l"),
         ("右 Alt", "alt_r"),
-        ("Alt（任意）", "alt"),
-        ("左 Shift", "shift_l"),
-        ("右 Shift", "shift_r"),
-        ("Shift（任意）", "shift"),
     ]
 
+    # 仅保留 26 个英文字母与空格
+    KEY_OPTIONS = ["space"] + [chr(i) for i in range(ord("a"), ord("z") + 1)]
+
+    # 旧配置中的「任意 Alt/Ctrl」映射到具体一侧；Shift 不再支持。
+    _MODIFIER_ALIASES = {
+        "ctrl": "ctrl_l",
+        "control": "ctrl_l",
+        "alt": "alt_l",
+        "option": "alt_l",
+    }
+    _ALLOWED_MODIFIERS = {"ctrl_l", "ctrl_r", "alt_l", "alt_r"}
+
+    @classmethod
+    def _normalize_modifier(cls, value, default: str) -> str:
+        """把旧配置的修饰键规范到左/右 Ctrl 或 Alt."""
+        text = str(value or "").strip().lower()
+        text = cls._MODIFIER_ALIASES.get(text, text)
+        return text if text in cls._ALLOWED_MODIFIERS else default
+
     # 修饰键值 -> 其能匹配的具体键名集合，用于判断两个修饰键是否会落到同一物理键。
-    # 与 src/plugins/shortcuts.py 的 _MODIFIER_ALIASES 保持一致。
     _MODIFIER_KEYSETS = {
-        "ctrl": {"ctrl_l", "ctrl_r", "control"},
         "ctrl_l": {"ctrl_l"},
         "ctrl_r": {"ctrl_r"},
-        "alt": {"alt_l", "alt_r", "option"},
         "alt_l": {"alt_l"},
         "alt_r": {"alt_r"},
-        "shift": {"shift_l", "shift_r"},
-        "shift_l": {"shift_l"},
-        "shift_r": {"shift_r"},
     }
 
     def _modifiers_overlap(self, a: str, b: str) -> bool:
-        """两个修饰键是否会匹配到同一个物理键（如 Ctrl(任意) 与 左 Ctrl）。"""
+        """两个修饰键是否会匹配到同一个物理键."""
         ka = self._MODIFIER_KEYSETS.get(a, {a})
         kb = self._MODIFIER_KEYSETS.get(b, {b})
         return bool(ka & kb)
@@ -162,19 +164,23 @@ class ShortcutsSettingsWidget(QWidget):
         layout.addWidget(self._create_title_label(title))
 
         # 第一个修饰键
-        first_combo = QComboBox()
+        first_combo = ArrowComboBox()
         for text, value in self.MODIFIER_OPTIONS:
             first_combo.addItem(text, value)
-        first_modifier = str(config.get("modifier", "alt_l")).lower()
+        first_modifier = self._normalize_modifier(
+            config.get("modifier", "alt_l"), "alt_l"
+        )
         self._set_combo_by_data(first_combo, first_modifier)
         first_combo.currentIndexChanged.connect(self.on_settings_changed)
         layout.addWidget(first_combo)
 
         # 第二个修饰键
-        second_combo = QComboBox()
+        second_combo = ArrowComboBox()
         for text, value in self.MODIFIER_OPTIONS:
             second_combo.addItem(text, value)
-        second_modifier = str(config.get("key2", "ctrl_l")).lower()
+        second_modifier = self._normalize_modifier(
+            config.get("key2", "ctrl_l"), "ctrl_l"
+        )
         self._set_combo_by_data(second_combo, second_modifier)
         second_combo.currentIndexChanged.connect(self.on_settings_changed)
         layout.addWidget(second_combo)
@@ -204,7 +210,7 @@ class ShortcutsSettingsWidget(QWidget):
         """创建行标题标签，宽度按最长标题统一，保证各行下拉框左对齐。"""
         label = QLabel(f"{title}:")
         metrics = label.fontMetrics()
-        width = max(metrics.width(f"{t}:") for t in self.TITLES)
+        width = max(metrics.horizontalAdvance(f"{t}:") for t in self.TITLES)
         label.setFixedWidth(width)
         return label
 
@@ -218,21 +224,23 @@ class ShortcutsSettingsWidget(QWidget):
         # 标题
         layout.addWidget(self._create_title_label(title))
 
-        # 修饰键选择
-        modifier_combo = QComboBox()
-        modifier_combo.addItems(["Ctrl", "Alt", "Shift"])
-        current_modifier = config.get("modifier", "ctrl").title()
-        modifier_combo.setCurrentText(current_modifier)
+        # 修饰键选择：仅左/右 Ctrl、左/右 Alt
+        modifier_combo = ArrowComboBox()
+        for text, value in self.MODIFIER_OPTIONS:
+            modifier_combo.addItem(text, value)
+        current_modifier = self._normalize_modifier(
+            config.get("modifier", "ctrl_l"), "ctrl_l"
+        )
+        self._set_combo_by_data(modifier_combo, current_modifier)
         modifier_combo.currentTextChanged.connect(self.on_settings_changed)
         layout.addWidget(modifier_combo)
 
-        # 按键选择（若配置中的键不在标准列表，则附加显示，避免回退丢失）
-        key_combo = QComboBox()
-        key_items = ["space"] + [chr(i) for i in range(ord("a"), ord("z") + 1)]
-        current_key = config.get("key", "j").lower()
-        if current_key and current_key not in key_items:
-            key_items.insert(1, current_key)
-        key_combo.addItems(key_items)
+        # 按键选择：仅 26 个英文字母与空格
+        key_combo = ArrowComboBox()
+        current_key = str(config.get("key", "space")).lower()
+        if current_key not in self.KEY_OPTIONS:
+            current_key = "space"
+        key_combo.addItems(self.KEY_OPTIONS)
         key_combo.setCurrentText(current_key)
         key_combo.currentTextChanged.connect(self.on_settings_changed)
         layout.addWidget(key_combo)
@@ -242,7 +250,7 @@ class ShortcutsSettingsWidget(QWidget):
         widget.key_combo = key_combo
         return widget
 
-    def on_settings_changed(self):
+    def on_settings_changed(self, *_args):
         """
         设置变更回调.
         """
@@ -267,21 +275,22 @@ class ShortcutsSettingsWidget(QWidget):
                     # 两个修饰键不能落到同一物理键（如 Ctrl(任意)+左 Ctrl），
                     # 否则单按一个键就会误触发。
                     if self._modifiers_overlap(first, second):
-                        from PyQt5.QtWidgets import QMessageBox
+                        from PySide6.QtWidgets import QMessageBox
 
                         QMessageBox.warning(
                             self,
                             "快捷键无效",
-                            "“按住说话”的两个修饰键必须是不同的键"
-                            "（例如 左 Alt + 左 Ctrl）。\n"
-                            "请不要选择同一类修饰键的“任意一侧”与具体某一侧组合。",
+                            "“按住说话”的两个修饰键不能相同"
+                            "（例如 左 Alt + 左 Ctrl）。",
                         )
                         continue
                     self.config.update_config(f"SHORTCUTS.{key}.modifier", first)
                     self.config.update_config(f"SHORTCUTS.{key}.key2", second)
                 else:
-                    modifier = widget.modifier_combo.currentText().lower()
+                    modifier = widget.modifier_combo.currentData() or "ctrl_l"
                     key_value = widget.key_combo.currentText().lower()
+                    if key_value not in self.KEY_OPTIONS:
+                        key_value = "space"
                     self.config.update_config(f"SHORTCUTS.{key}.modifier", modifier)
                     self.config.update_config(f"SHORTCUTS.{key}.key", key_value)
 
@@ -302,9 +311,9 @@ class ShortcutsSettingsWidget(QWidget):
         defaults = {
             "ENABLED": True,
             "MANUAL_PRESS": {"modifier": "alt_l", "key2": "ctrl_l"},
-            "ABORT": {"modifier": "alt", "key": "q"},
-            "WINDOW_TOGGLE": {"modifier": "alt", "key": "w"},
-            "MUSIC_LYRICS_TOGGLE": {"modifier": "alt", "key": "l"},
+            "ABORT": {"modifier": "alt_l", "key": "q"},
+            "WINDOW_TOGGLE": {"modifier": "alt_l", "key": "w"},
+            "MUSIC_LYRICS_TOGGLE": {"modifier": "alt_l", "key": "l"},
         }
 
         # 更新UI
@@ -326,7 +335,7 @@ class ShortcutsSettingsWidget(QWidget):
                     widget.second_combo, config.get("key2", "ctrl_l")
                 )
             else:
-                widget.modifier_combo.setCurrentText(config["modifier"].title())
+                self._set_combo_by_data(widget.modifier_combo, config["modifier"])
                 widget.key_combo.setCurrentText(config["key"].lower())
 
         # 触发变更信号

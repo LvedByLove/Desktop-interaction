@@ -6,14 +6,15 @@
 from pathlib import Path
 from typing import Optional
 
-from PyQt5.QtCore import QSize, Qt, QUrl, pyqtSignal
-from PyQt5.QtGui import QPainterPath, QRegion
-from PyQt5.QtQuickWidgets import QQuickWidget
-from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget
+from PySide6.QtCore import QSize, Qt, QUrl, Signal
+from PySide6.QtGui import QPainterPath, QRegion
+from PySide6.QtQuickWidgets import QQuickWidget
+from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
 
 from src.core.system_initializer import SystemInitializer
 from src.utils.device_activator import DeviceActivator
 from src.utils.logging_config import get_logger
+from src.utils.qt_compat import ensure_quick_controls_style
 
 from ..base.async_mixins import AsyncMixin, AsyncSignalEmitter
 from ..base.base_window import BaseWindow
@@ -28,8 +29,8 @@ class ActivationWindow(BaseWindow, AsyncMixin):
     """
 
     # 自定义信号
-    activation_completed = pyqtSignal(bool)  # 激活完成信号
-    window_closed = pyqtSignal()  # 窗口关闭信号
+    activation_completed = Signal(bool)  # 激活完成信号
+    window_closed = Signal()  # 窗口关闭信号
 
     def __init__(
         self,
@@ -67,6 +68,7 @@ class ActivationWindow(BaseWindow, AsyncMixin):
         """
         设置UI.
         """
+        ensure_quick_controls_style()
         # 设置无边框窗口
         # 检测显示服务器类型以兼容Wayland
         import os

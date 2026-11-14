@@ -4,9 +4,9 @@
 
 from typing import Optional
 
-from PyQt5.QtCore import QObject, QRectF, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QCursor, QIcon, QPainter, QPainterPath
-from PyQt5.QtWidgets import (
+from PySide6.QtCore import QObject, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QCursor, QIcon, QPainter, QPainterPath
+from PySide6.QtWidgets import (
     QApplication,
     QFrame,
     QPushButton,
@@ -44,9 +44,9 @@ class SystemTray(QObject):
     """
 
     # 定义信号
-    show_window_requested = pyqtSignal()
-    settings_requested = pyqtSignal()
-    quit_requested = pyqtSignal()
+    show_window_requested = Signal()
+    settings_requested = Signal()
+    quit_requested = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -125,7 +125,7 @@ class SystemTray(QObject):
         layout.setContentsMargins(9, 9, 9, 9)
         layout.setSpacing(4)
 
-        settings_btn = QPushButton("参数配置", menu)
+        settings_btn = QPushButton("设置", menu)
         settings_btn.setObjectName("TrayPopupButton")
         settings_btn.clicked.connect(self._on_settings_from_popup)
         layout.addWidget(settings_btn)
@@ -135,7 +135,7 @@ class SystemTray(QObject):
         separator.setFrameShape(QFrame.HLine)
         layout.addWidget(separator)
 
-        quit_btn = QPushButton("退出程序", menu)
+        quit_btn = QPushButton("退出", menu)
         quit_btn.setObjectName("TrayPopupQuitButton")
         quit_btn.clicked.connect(self._on_quit_from_popup)
         layout.addWidget(quit_btn)

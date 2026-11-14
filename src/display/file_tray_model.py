@@ -11,16 +11,16 @@ import hashlib
 import os
 import tempfile
 
-from PyQt5.QtCore import (
+from PySide6.QtCore import (
     QAbstractListModel,
     QFileInfo,
     QModelIndex,
     Qt,
     QUrl,
-    pyqtSignal,
+    Signal,
 )
-from PyQt5.QtGui import QPixmap
-from PyQt5.QtWidgets import QFileIconProvider
+from PySide6.QtGui import QPixmap
+from PySide6.QtWidgets import QFileIconProvider
 
 
 class FileIconProvider:
@@ -105,7 +105,7 @@ class FileTrayModel(QAbstractListModel):
     SelectedRole = Qt.UserRole + 3
 
     # 内容变化通知（供 QML 刷新尺寸 / 空态自动关闭）
-    changed = pyqtSignal()
+    changed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)

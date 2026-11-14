@@ -159,6 +159,9 @@ class PluginShortcutManager:
             self._health_check_task.cancel()
             try:
                 await asyncio.wrap_future(self._health_check_task)
+            except asyncio.CancelledError:
+                # 取消自己的健康检查任务属于正常关闭流程
+                pass
             except Exception:
                 pass
             self._health_check_task = None

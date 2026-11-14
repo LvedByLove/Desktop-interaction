@@ -1,4 +1,4 @@
-# Views包 - 所有PyQt界面组件
+# Views包 - 所有 Qt 界面组件
 """Views模块包含所有的PyQt界面组件.
 
 - base: 基础组件和通用类

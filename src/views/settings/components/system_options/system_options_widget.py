@@ -1,11 +1,23 @@
 from pathlib import Path
 
-from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtWidgets import QCheckBox, QComboBox, QLineEdit, QWidget
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QFormLayout,
+    QGroupBox,
+    QLabel,
+    QLineEdit,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
 
 from src.utils.autostart import disable_autostart, enable_autostart
 from src.utils.config_manager import ConfigManager
 from src.utils.logging_config import get_logger
+from src.views.components.password_toggle import attach_password_toggle
+from src.views.components.toggle_switch import ToggleSwitch
 
 
 class SystemOptionsWidget(QWidget):
@@ -14,7 +26,11 @@ class SystemOptionsWidget(QWidget):
     """
 
     # 信号定义
-    settings_changed = pyqtSignal()
+    settings_changed = Signal()
+
+    def _emit_settings_changed(self, *_args):
+        """兼容带参数的控件信号（PySide6 不允许把多余参数传给零参信号）."""
+        self.settings_changed.emit()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -23,6 +39,11 @@ class SystemOptionsWidget(QWidget):
 
         # UI控件引用
         self.ui_controls = {}
+
+        # 动态构建的高级选项
+        self.aec_music_parallel_check = None
+        self.aec_frame_delay_spin = None
+        self.aec_preprocess_check = None
 
         # 初始化UI
         self._setup_ui()
@@ -34,13 +55,20 @@ class SystemOptionsWidget(QWidget):
         设置UI界面.
         """
         try:
-            from PyQt5 import uic
+            from src.utils.ui_loader import load_ui_into
 
             ui_path = Path(__file__).parent / "system_options_widget.ui"
-            uic.loadUi(str(ui_path), self)
+            load_ui_into(ui_path, self)
 
             # 获取UI控件引用
             self._get_ui_controls()
+
+            # 密码框显示/隐藏切换
+            attach_password_toggle(self.ui_controls.get("websocket_token_edit"))
+            attach_password_toggle(self.ui_controls.get("mqtt_password_edit"))
+
+            # 高级选项：AEC 细节
+            self._build_aec_advanced_rows()
 
         except Exception as e:
             self.logger.error(f"设置系统选项UI失败: {e}", exc_info=True)
@@ -94,6 +122,53 @@ class SystemOptionsWidget(QWidget):
             }
         )
 
+    def _build_aec_advanced_rows(self):
+        """在 AEC 开关下方插入「音乐并行 / 延迟补偿 / 预处理」三项."""
+        form = self.findChild(QFormLayout, "formLayout")
+        if form is None:
+            return
+
+        self.aec_music_parallel_check = ToggleSwitch("TTS 播放时音乐闪避（继续播放）")
+        self.aec_music_parallel_check.setToolTip(
+            "勾选：TTS 播报时音乐继续播放但压低音量；\n"
+            "取消：TTS 播报期间音乐静音。"
+        )
+        self.aec_frame_delay_spin = QSpinBox()
+        self.aec_frame_delay_spin.setRange(0, 20)
+        self.aec_frame_delay_spin.setSuffix(" 帧")
+        self.aec_frame_delay_spin.setToolTip(
+            "延迟补偿：40ms + N × 协议帧长；蓝牙设备可适当调大。"
+        )
+        self.aec_preprocess_check = ToggleSwitch("启用噪声抑制 / 高通预处理")
+
+        # 现有 AEC 开关位于第 7 行，其后依次插入
+        insert_at = 8
+        for label, widget in (
+            ("音乐并行播放:", self.aec_music_parallel_check),
+            ("延迟补偿帧数:", self.aec_frame_delay_spin),
+            ("噪声抑制预处理:", self.aec_preprocess_check),
+        ):
+            form.insertRow(insert_at, QLabel(label), widget)
+            insert_at += 1
+
+        for control in (
+            self.aec_music_parallel_check,
+            self.aec_preprocess_check,
+        ):
+            control.stateChanged.connect(self._emit_settings_changed)
+        self.aec_frame_delay_spin.valueChanged.connect(self._emit_settings_changed)
+
+    def add_section(self, title: str, widget: QWidget):
+        """在页面末尾追加一个分组（用于内嵌快捷键等独立设置组件）."""
+        form = self.findChild(QFormLayout, "formLayout")
+        if form is None:
+            return
+        group = QGroupBox(title)
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(0, 6, 0, 2)
+        layout.addWidget(widget)
+        form.addRow(group)
+
     def _connect_events(self):
         """
         连接事件处理.
@@ -101,11 +176,11 @@ class SystemOptionsWidget(QWidget):
         # 为所有输入控件连接变更信号
         for control in self.ui_controls.values():
             if isinstance(control, QLineEdit):
-                control.textChanged.connect(self.settings_changed.emit)
+                control.textChanged.connect(self._emit_settings_changed)
             elif isinstance(control, QComboBox):
-                control.currentTextChanged.connect(self.settings_changed.emit)
+                control.currentTextChanged.connect(self._emit_settings_changed)
             elif isinstance(control, QCheckBox):
-                control.stateChanged.connect(self.settings_changed.emit)
+                control.stateChanged.connect(self._emit_settings_changed)
 
     def _load_config_values(self):
         """
@@ -188,6 +263,28 @@ class SystemOptionsWidget(QWidget):
             # AEC配置
             aec_enabled = self.config_manager.get_config("AEC_OPTIONS.ENABLED", True)
             self._set_check_value("aec_enabled_check", aec_enabled)
+
+            # AEC 高级项
+            if self.aec_music_parallel_check is not None:
+                self.aec_music_parallel_check.setChecked(
+                    bool(
+                        self.config_manager.get_config(
+                            "AEC_OPTIONS.MUSIC_PARALLEL", True
+                        )
+                    )
+                )
+            if self.aec_frame_delay_spin is not None:
+                self.aec_frame_delay_spin.setValue(
+                    int(self.config_manager.get_config("AEC_OPTIONS.FRAME_DELAY", 3))
+                )
+            if self.aec_preprocess_check is not None:
+                self.aec_preprocess_check.setChecked(
+                    bool(
+                        self.config_manager.get_config(
+                            "AEC_OPTIONS.ENABLE_PREPROCESS", True
+                        )
+                    )
+                )
 
             # 开机自启动
             autostart = self.config_manager.get_config(
@@ -328,6 +425,19 @@ class SystemOptionsWidget(QWidget):
             aec_enabled = self._get_check_value("aec_enabled_check")
             config_data["AEC_OPTIONS.ENABLED"] = aec_enabled
 
+            if self.aec_music_parallel_check is not None:
+                config_data["AEC_OPTIONS.MUSIC_PARALLEL"] = (
+                    self.aec_music_parallel_check.isChecked()
+                )
+            if self.aec_frame_delay_spin is not None:
+                config_data["AEC_OPTIONS.FRAME_DELAY"] = (
+                    self.aec_frame_delay_spin.value()
+                )
+            if self.aec_preprocess_check is not None:
+                config_data["AEC_OPTIONS.ENABLE_PREPROCESS"] = (
+                    self.aec_preprocess_check.isChecked()
+                )
+
             # 开机自启动
             autostart = self._get_check_value("autostart_check")
             config_data["SYSTEM_OPTIONS.AUTOSTART"] = autostart
@@ -375,6 +485,18 @@ class SystemOptionsWidget(QWidget):
             self._set_check_value(
                 "aec_enabled_check", default_aec.get("ENABLED", False)
             )
+            if self.aec_music_parallel_check is not None:
+                self.aec_music_parallel_check.setChecked(
+                    bool(default_aec.get("MUSIC_PARALLEL", True))
+                )
+            if self.aec_frame_delay_spin is not None:
+                self.aec_frame_delay_spin.setValue(
+                    int(default_aec.get("FRAME_DELAY", 3))
+                )
+            if self.aec_preprocess_check is not None:
+                self.aec_preprocess_check.setChecked(
+                    bool(default_aec.get("ENABLE_PREPROCESS", True))
+                )
 
             # 开机自启动默认值
             default_autostart = default_config["SYSTEM_OPTIONS"].get("AUTOSTART", False)

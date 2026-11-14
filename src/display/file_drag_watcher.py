@@ -8,7 +8,7 @@
 最终是否唤醒圆球由 ole_drop_catcher 的 CF_HDROP 判断（精确关卡）决定。
 """
 
-from PyQt5.QtCore import QObject, pyqtSignal
+from PySide6.QtCore import QObject, Signal
 
 from src.utils.logging_config import get_logger
 
@@ -25,8 +25,8 @@ class FileDragWatcher(QObject):
     显示隐形窗口零代价（拖拽期间鼠标被拖放源捕获），误判无害。
     """
 
-    dragStarted = pyqtSignal()
-    dragEnded = pyqtSignal()
+    dragStarted = Signal()
+    dragEnded = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)

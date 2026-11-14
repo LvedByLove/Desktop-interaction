@@ -17,7 +17,7 @@
    </size>
   </property>
   <property name="windowTitle">
-   <string>参数配置</string>
+   <string>Desktop-interaction</string>
   </property>
   <property name="modal">
    <bool>true</bool>
@@ -361,7 +361,7 @@
                 <string>提示: 每行输入一个唤醒词，如"小智"、"小美"</string>
                </property>
                <property name="styleSheet">
-                <string>color: #666; font-size: 11px;</string>
+                <string>color: #6b7280; font-size: 12px;</string>
                </property>
               </widget>
              </item>

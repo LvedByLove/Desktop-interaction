@@ -26,7 +26,7 @@ import ctypes
 import threading
 from ctypes import wintypes
 
-from PyQt5.QtCore import QObject, pyqtSignal
+from PySide6.QtCore import QObject, Signal
 
 from src.utils.logging_config import get_logger
 
@@ -305,7 +305,7 @@ class OleDropCatcher(QObject):
     ZONE_HEIGHT = 100
 
     # 文件拖拽进入目标区（在后台线程发射，Qt 队列投递到主线程）
-    fileDragEntered = pyqtSignal()
+    fileDragEntered = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)

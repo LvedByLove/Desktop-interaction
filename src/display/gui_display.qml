@@ -1,7 +1,6 @@
-import QtQuick 2.15
-import QtQuick.Controls 2.15
-import QtQuick.Layouts 1.15
-import QtGraphicalEffects 1.15
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
 
 Rectangle {
     id: root
@@ -543,7 +542,7 @@ Rectangle {
                 // 布局测量完成后按容器宽度决定居中还是左对齐
                 onWidthChanged: root.syncTtsTextPosition()
                 text: displayModel ? displayModel.ttsText : "语音播报中..."
-                font.family: "Segoe UI, Microsoft YaHei UI"
+                font.family: "Microsoft YaHei UI"
                 font.pixelSize: 14
                 font.weight: Font.Medium
                 color: "white"
@@ -620,7 +619,7 @@ Rectangle {
                 id: inputText
                 anchors.fill: parent
                 verticalAlignment: TextInput.AlignVCenter
-                font.family: "Segoe UI, Microsoft YaHei UI"
+                font.family: "Microsoft YaHei UI"
                 font.pixelSize: 15
                 color: "white"
                 selectedTextColor: "white"
@@ -644,7 +643,7 @@ Rectangle {
             Text {
                 anchors.fill: parent
                 text: "请输入简短字句，长句请用语音..."
-                font.family: "Segoe UI, Microsoft YaHei UI"
+                font.family: "Microsoft YaHei UI"
                 font.pixelSize: 15
                 color: Qt.rgba(255/255, 255/255, 255/255, 0.42)
                 verticalAlignment: Text.AlignVCenter
@@ -664,7 +663,7 @@ Rectangle {
             }
             contentItem: Text {
                 text: inputSendBtn.text
-                font.family: "Segoe UI, Microsoft YaHei UI"
+                font.family: "Microsoft YaHei UI"
                 font.pixelSize: 14
                 font.weight: Font.Medium
                 color: inputSendBtn.enabled ? "white" : Qt.rgba(255/255, 255/255, 255/255, 0.35)
@@ -694,7 +693,7 @@ Rectangle {
                 Text {
                     Layout.fillWidth: true
                     text: "对话记录"
-                    font.family: "Segoe UI, Microsoft YaHei UI"
+                    font.family: "Microsoft YaHei UI"
                     font.pixelSize: 15
                     font.weight: Font.DemiBold
                     color: "white"
@@ -739,7 +738,7 @@ Rectangle {
                     width: transcriptFlickable.width
                     text: (displayModel && displayModel.ttsTranscript) ? displayModel.ttsTranscript : "暂无对话记录"
                     color: (displayModel && displayModel.ttsTranscript) ? Qt.rgba(255/255, 255/255, 255/255, 0.92) : Qt.rgba(255/255, 255/255, 255/255, 0.4)
-                    font.family: "Segoe UI, Microsoft YaHei UI"
+                    font.family: "Microsoft YaHei UI"
                     font.pixelSize: 14
                     wrapMode: Text.Wrap
                     textFormat: Text.PlainText

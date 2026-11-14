@@ -220,7 +220,7 @@
              </size>
             </property>
             <property name="styleSheet">
-             <string>border: 1px solid #e5e6eb; border-radius: 12px; background-color: #f7f8fa; color: #86909c;</string>
+             <string>border: 1px solid #e5e7eb; border-radius: 12px; background-color: #f9fafb; color: #6b7280;</string>
             </property>
             <property name="text">
              <string>摄像头预览区域

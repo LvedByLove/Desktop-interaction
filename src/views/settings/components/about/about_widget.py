@@ -1,7 +1,7 @@
 """关于页面组件."""
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QGroupBox, QLabel, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QGroupBox, QLabel, QVBoxLayout, QWidget
 
 
 class AboutWidget(QWidget):

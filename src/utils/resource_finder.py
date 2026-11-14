@@ -2,14 +2,43 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import plistlib
+import shutil
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 PathLike = Union[str, Path]
 _MANIFEST_CANDIDATES = ("unifypy.json", "app.json", "package.json")
+
+_logger = logging.getLogger(__name__)
+
+# 可写目录环境变量（优先级最高，便于便携版/调试）
+ENV_DATA_DIR = "XIAOZHI_DATA_DIR"
+ENV_CACHE_DIR = "XIAOZHI_CACHE_DIR"
+ENV_LOG_DIR = "XIAOZHI_LOG_DIR"
+ENV_MUSIC_CACHE_DIR = "XIAOZHI_MUSIC_CACHE_DIR"
+ENV_KEYWORDS_DIR = "XIAOZHI_KEYWORDS_DIR"
+
+# 运行时覆盖（由 apply_path_overrides_from_config 设置）
+_override_cache: Optional[Path] = None
+_override_log: Optional[Path] = None
+_override_music: Optional[Path] = None
+_override_keywords: Optional[Path] = None
+_override_mcp_plugins: Optional[Path] = None
+
+
+def _env_path(name: str) -> Optional[Path]:
+    """读取路径环境变量；空值/非法值返回 None."""
+    raw = os.environ.get(name)
+    if not raw or not str(raw).strip():
+        return None
+    try:
+        return Path(str(raw).strip()).expanduser().resolve()
+    except Exception:
+        return None
 
 
 class ResourceFinder:
@@ -64,20 +93,74 @@ class ResourceFinder:
     def get_user_data_dir(self, create: bool = True) -> Path:
         """
         用户数据（可写）目录。
+
+        优先环境变量 XIAOZHI_DATA_DIR；否则按平台惯例。
         """
-        home = Path.home()
-        if sys.platform == "win32":
-            p = home / "AppData" / "Local" / self._app_name
-        elif sys.platform == "darwin":
-            p = home / "Library" / "Application Support" / self._app_name
+        env = _env_path(ENV_DATA_DIR)
+        if env is not None:
+            p = env
         else:
-            p = home / ".local" / "share" / self._app_name
+            home = Path.home()
+            if sys.platform == "win32":
+                p = home / "AppData" / "Local" / self._app_name
+            elif sys.platform == "darwin":
+                p = home / "Library" / "Application Support" / self._app_name
+            else:
+                p = home / ".local" / "share" / self._app_name
         if create:
             p.mkdir(parents=True, exist_ok=True)
         return p.resolve()
 
     def get_user_cache_dir(self, create: bool = True) -> Path:
-        p = self.get_user_data_dir(create=False) / "cache"
+        """缓存目录：环境变量 > 运行时覆盖 > {用户数据}/cache."""
+        p = (
+            _env_path(ENV_CACHE_DIR)
+            or _override_cache
+            or (self.get_user_data_dir(create=False) / "cache")
+        )
+        if create:
+            p.mkdir(parents=True, exist_ok=True)
+        return p.resolve()
+
+    def get_user_log_dir(self, create: bool = True) -> Path:
+        """日志目录：环境变量 > 运行时覆盖 > {用户数据}/logs."""
+        p = (
+            _env_path(ENV_LOG_DIR)
+            or _override_log
+            or (self.get_user_data_dir(create=False) / "logs")
+        )
+        if create:
+            p.mkdir(parents=True, exist_ok=True)
+        return p.resolve()
+
+    def get_music_cache_dir(self, create: bool = True) -> Path:
+        """音乐缓存：环境变量 > 运行时覆盖 > {缓存}/music."""
+        p = (
+            _env_path(ENV_MUSIC_CACHE_DIR)
+            or _override_music
+            or (self.get_user_cache_dir(create=False) / "music")
+        )
+        if create:
+            p.mkdir(parents=True, exist_ok=True)
+        return p.resolve()
+
+    def get_keywords_dir(self, create: bool = True) -> Path:
+        """唤醒词目录：环境变量 > 运行时覆盖 > {用户数据}/keywords."""
+        p = (
+            _env_path(ENV_KEYWORDS_DIR)
+            or _override_keywords
+            or (self.get_user_data_dir(create=False) / "keywords")
+        )
+        if create:
+            p.mkdir(parents=True, exist_ok=True)
+        return p.resolve()
+
+    def get_mcp_plugins_dir(self, create: bool = True) -> Path:
+        """外部 MCP 插件目录：运行时覆盖 > {用户数据}/mcp_plugins."""
+        p = (
+            _override_mcp_plugins
+            or (self.get_user_data_dir(create=False) / "mcp_plugins")
+        )
         if create:
             p.mkdir(parents=True, exist_ok=True)
         return p.resolve()
@@ -340,6 +423,211 @@ class ResourceFinder:
         return None
 
 
+# --------- 可写目录迁移 / PATHS 覆盖 ---------
+
+
+def _paths_overlap(src: Path, dst: Path) -> bool:
+    """两个目录互相包含（或相同）时视为重叠，避免把目录拷进自身."""
+    try:
+        src = src.resolve()
+        dst = dst.resolve()
+    except Exception:
+        return False
+    if src == dst:
+        return True
+    try:
+        return src.is_relative_to(dst) or dst.is_relative_to(src)
+    except Exception:
+        return False
+
+
+def migrate_directory(
+    src: Path,
+    dst: Path,
+    *,
+    skip_dir_names: Optional[set] = None,
+) -> Dict[str, Any]:
+    """把旧目录内容复制到新目录（不删除源文件）.
+
+    已存在的目标文件不覆盖，避免覆盖用户新目录中的内容。
+    """
+    src = Path(src).expanduser().resolve()
+    dst = Path(dst).expanduser().resolve()
+    skip = set(skip_dir_names or ())
+    result: Dict[str, Any] = {
+        "ok": False,
+        "src": str(src),
+        "dst": str(dst),
+        "files_copied": 0,
+    }
+
+    if src == dst:
+        result["ok"] = True
+        result["skipped"] = "same_path"
+        return result
+    if _paths_overlap(src, dst):
+        result["error"] = "源目录与目标目录重叠"
+        return result
+    if not src.is_dir():
+        result["ok"] = True
+        result["skipped"] = "src_missing"
+        return result
+
+    try:
+        dst.mkdir(parents=True, exist_ok=True)
+        count = 0
+        for root, dirs, files in os.walk(src):
+            rel = Path(root).relative_to(src)
+            if rel == Path("."):
+                dirs[:] = [d for d in dirs if d not in skip]
+            elif rel.parts and rel.parts[0] in skip:
+                dirs[:] = []
+                continue
+
+            target_root = dst / rel
+            target_root.mkdir(parents=True, exist_ok=True)
+            for name in files:
+                source_file = Path(root) / name
+                target_file = target_root / name
+                if target_file.exists():
+                    continue
+                try:
+                    shutil.copy2(source_file, target_file)
+                    count += 1
+                except Exception as exc:
+                    _logger.warning("迁移文件失败 %s: %s", source_file, exc)
+        result["ok"] = True
+        result["files_copied"] = count
+    except Exception as exc:
+        result["error"] = str(exc)
+        _logger.warning("迁移目录失败 %s -> %s: %s", src, dst, exc)
+    return result
+
+
+def apply_path_overrides_from_config(
+    config: Any,
+    *,
+    migrate: bool = True,
+) -> List[Dict[str, Any]]:
+    """读取 PATHS.* / MCP_PLUGINS.DIR，设置运行时覆盖并复制旧目录内容.
+
+    环境变量始终优先于配置；config 目录本身不迁移。
+    """
+    global _override_cache, _override_log, _override_music
+    global _override_keywords, _override_mcp_plugins
+
+    results: List[Dict[str, Any]] = []
+
+    def _cfg(key: str) -> Optional[str]:
+        try:
+            value = config.get_config(key, None)
+        except Exception:
+            return None
+        if value is None or not str(value).strip():
+            return None
+        return str(value).strip()
+
+    def _resolve(value: Optional[str]) -> Optional[Path]:
+        if not value:
+            return None
+        try:
+            return Path(value).expanduser().resolve()
+        except Exception:
+            return None
+
+    data_dir = get_user_data_dir()
+
+    # 覆盖前的有效路径，作为迁移源
+    old_cache = get_user_cache_dir(create=False)
+    old_log = get_user_log_dir(create=False)
+    old_music = get_music_cache_dir(create=False)
+    old_keywords = get_keywords_dir(create=False)
+
+    cache_cfg = _resolve(_cfg("PATHS.CACHE_DIR"))
+    log_cfg = _resolve(_cfg("PATHS.LOG_DIR"))
+    music_cfg = _resolve(_cfg("PATHS.MUSIC_CACHE_DIR"))
+    keywords_cfg = _resolve(_cfg("PATHS.KEYWORDS_DIR"))
+    mcp_cfg = _resolve(_cfg("MCP_PLUGINS.DIR"))
+
+    # 环境变量优先；音乐缓存默认跟随缓存目录
+    proposed_cache = _env_path(ENV_CACHE_DIR) or cache_cfg or (data_dir / "cache")
+    proposed_log = _env_path(ENV_LOG_DIR) or log_cfg or (data_dir / "logs")
+    proposed_keywords = (
+        _env_path(ENV_KEYWORDS_DIR) or keywords_cfg or (data_dir / "keywords")
+    )
+    proposed_music = (
+        _env_path(ENV_MUSIC_CACHE_DIR) or music_cfg or (proposed_cache / "music")
+    )
+    proposed_mcp = mcp_cfg or (data_dir / "mcp_plugins")
+
+    # 只应用配置值（环境变量在 getter 中已优先）
+    _override_cache = cache_cfg
+    _override_log = log_cfg
+    _override_music = music_cfg
+    _override_keywords = keywords_cfg
+    _override_mcp_plugins = mcp_cfg
+
+    if not migrate:
+        return results
+
+    migrations = (
+        ("cache", old_cache, proposed_cache),
+        ("logs", old_log, proposed_log),
+        ("music", old_music, proposed_music),
+        ("keywords", old_keywords, proposed_keywords),
+    )
+
+    for kind, old, new in migrations:
+        old = Path(old)
+        new = Path(new)
+        if old == new:
+            continue
+        if _paths_overlap(old, new):
+            result = {
+                "kind": kind,
+                "ok": False,
+                "src": str(old),
+                "dst": str(new),
+                "files_copied": 0,
+                "error": "源目录与目标目录重叠",
+            }
+            results.append(result)
+            _logger.warning(
+                "[PATHS] %s 目录迁移跳过：源与目标重叠 (%s -> %s)",
+                kind,
+                old,
+                new,
+            )
+            continue
+
+        skip_dirs: set = set()
+        if kind == "cache":
+            # 音乐缓存已单独指定到别处时，cache 迁移不要再拷旧 music 子树
+            try:
+                music_inside_old_cache = old_music == (old_cache / "music")
+                music_moved_elsewhere = proposed_music != (proposed_cache / "music")
+                if music_inside_old_cache and music_moved_elsewhere:
+                    skip_dirs.add("music")
+            except Exception:
+                pass
+
+        result = migrate_directory(old, new, skip_dir_names=skip_dirs)
+        result["kind"] = kind
+        results.append(result)
+        if result.get("ok") and result.get("files_copied"):
+            _logger.info(
+                "[PATHS] %s 目录已迁移: %s -> %s（%s 个文件）",
+                kind,
+                old,
+                new,
+                result["files_copied"],
+            )
+        elif result.get("error"):
+            _logger.warning("[PATHS] %s 目录迁移失败: %s", kind, result["error"])
+
+    return results
+
+
 # --------- 单例与便捷函数（含兼容） ---------
 resource_finder = ResourceFinder()
 
@@ -362,6 +650,27 @@ def get_user_data_dir(create: bool = True) -> Path:
 
 def get_user_cache_dir(create: bool = True) -> Path:
     return resource_finder.get_user_cache_dir(create)
+
+
+def get_user_log_dir(create: bool = True) -> Path:
+    return resource_finder.get_user_log_dir(create)
+
+
+def get_log_dir(create: bool = True) -> Path:
+    """日志目录（优先 PATHS.LOG_DIR / 环境变量）."""
+    return resource_finder.get_user_log_dir(create)
+
+
+def get_music_cache_dir(create: bool = True) -> Path:
+    return resource_finder.get_music_cache_dir(create)
+
+
+def get_keywords_dir(create: bool = True) -> Path:
+    return resource_finder.get_keywords_dir(create)
+
+
+def get_mcp_plugins_dir(create: bool = True) -> Path:
+    return resource_finder.get_mcp_plugins_dir(create)
 
 
 def get_default_music_dir() -> Path:

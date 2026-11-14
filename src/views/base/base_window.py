@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-基础窗口类 - 所有PyQt窗口的基类
+基础窗口类 - 所有 Qt 窗口的基类
 支持异步操作和qasync集成
 """
 
 import asyncio
 from typing import Optional
 
-from PyQt5.QtCore import QTimer, pyqtSignal
-from PyQt5.QtWidgets import QMainWindow, QWidget
+from PySide6.QtCore import QTimer, Signal
+from PySide6.QtWidgets import QMainWindow, QWidget
 
 from src.utils.logging_config import get_logger
 
@@ -21,8 +21,8 @@ class BaseWindow(QMainWindow):
     """
 
     # 定义信号
-    window_closed = pyqtSignal()
-    status_updated = pyqtSignal(str)
+    window_closed = Signal()
+    status_updated = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)

@@ -3,7 +3,7 @@
 激活窗口数据模型 - 用于QML数据绑定
 """
 
-from PyQt5.QtCore import QObject, pyqtProperty, pyqtSignal
+from PySide6.QtCore import QObject, Property, Signal
 
 
 class ActivationModel(QObject):
@@ -12,16 +12,16 @@ class ActivationModel(QObject):
     """
 
     # 属性变化信号
-    serialNumberChanged = pyqtSignal()
-    macAddressChanged = pyqtSignal()
-    activationStatusChanged = pyqtSignal()
-    activationCodeChanged = pyqtSignal()
-    statusColorChanged = pyqtSignal()
+    serialNumberChanged = Signal()
+    macAddressChanged = Signal()
+    activationStatusChanged = Signal()
+    activationCodeChanged = Signal()
+    statusColorChanged = Signal()
 
     # 用户操作信号
-    copyCodeClicked = pyqtSignal()
-    retryClicked = pyqtSignal()
-    closeClicked = pyqtSignal()
+    copyCodeClicked = Signal()
+    retryClicked = Signal()
+    closeClicked = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -34,7 +34,7 @@ class ActivationModel(QObject):
         self._status_color = "#6c757d"
 
     # 序列号属性
-    @pyqtProperty(str, notify=serialNumberChanged)
+    @Property(str, notify=serialNumberChanged)
     def serialNumber(self):
         return self._serial_number
 
@@ -45,7 +45,7 @@ class ActivationModel(QObject):
             self.serialNumberChanged.emit()
 
     # MAC地址属性
-    @pyqtProperty(str, notify=macAddressChanged)
+    @Property(str, notify=macAddressChanged)
     def macAddress(self):
         return self._mac_address
 
@@ -56,7 +56,7 @@ class ActivationModel(QObject):
             self.macAddressChanged.emit()
 
     # 激活状态属性
-    @pyqtProperty(str, notify=activationStatusChanged)
+    @Property(str, notify=activationStatusChanged)
     def activationStatus(self):
         return self._activation_status
 
@@ -67,7 +67,7 @@ class ActivationModel(QObject):
             self.activationStatusChanged.emit()
 
     # 激活码属性
-    @pyqtProperty(str, notify=activationCodeChanged)
+    @Property(str, notify=activationCodeChanged)
     def activationCode(self):
         return self._activation_code
 
@@ -78,7 +78,7 @@ class ActivationModel(QObject):
             self.activationCodeChanged.emit()
 
     # 状态颜色属性
-    @pyqtProperty(str, notify=statusColorChanged)
+    @Property(str, notify=statusColorChanged)
     def statusColor(self):
         return self._status_color
 

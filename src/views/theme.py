@@ -1,5 +1,5 @@
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont
 
 
 FONT_FAMILY = "Microsoft YaHei UI"
@@ -8,128 +8,105 @@ FONT_FAMILY = "Microsoft YaHei UI"
 SETTINGS_DIALOG_QSS = """
 QDialog#SettingsWindow,
 QDialog#ThemedDialog {
-    background: #f7f8fa;
-    color: #1d2129;
-    border: 1px solid #e5e6eb;
-    border-radius: 18px;
+    background: #f9fafb;
+    color: #111827;
 }
 
 QDialog#SettingsWindow QWidget,
 QDialog#ThemedDialog QWidget {
-    background: #f7f8fa;
-    color: #1d2129;
     font-family: "Microsoft YaHei UI";
+    font-size: 14px;
+    color: #111827;
+}
+
+QLabel {
+    color: #374151;
+    background: transparent;
+    font-size: 14px;
+}
+
+QLabel#SettingsPageTitle {
+    color: #111827;
+    font-size: 24px;
+    font-weight: bold;
+}
+
+QLabel#SettingsPageSubtitle {
+    color: #6b7280;
     font-size: 13px;
 }
 
-QTabWidget::pane {
-    border: 1px solid #e5e6eb;
-    border-radius: 14px;
+QLabel#SettingsSectionTitle {
+    color: #111827;
+    font-size: 18px;
+    font-weight: bold;
+    padding-bottom: 2px;
+}
+
+QLabel#SettingsStatusLabel {
+    color: #6b7280;
+    font-size: 13px;
+}
+
+QWidget#SettingsSidebar {
+    background: transparent;
+}
+
+QFrame#SettingsContentCard {
     background: #ffffff;
-    top: -1px;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
 }
 
-QTabBar::tab {
-    background: #f2f3f5;
-    color: #4e5969;
-    border: 1px solid #e5e6eb;
-    border-bottom: none;
-    padding: 9px 18px;
-    margin-right: 6px;
-    border-top-left-radius: 10px;
-    border-top-right-radius: 10px;
-}
-
-QTabBar::tab:hover {
-    background: #e8f3ff;
-    color: #165dff;
-}
-
-QTabBar::tab:selected {
-    background: #165dff;
-    color: #ffffff;
-    border-color: #165dff;
-}
-
-QScrollArea,
-QScrollArea > QWidget,
-QScrollArea > QWidget > QWidget {
-    background: #ffffff;
+QFrame#SettingsSeparator {
+    background: #f3f4f6;
     border: none;
 }
 
+QStackedWidget#SettingsStack {
+    background: transparent;
+}
+
+QWidget[settingsPage="true"] {
+    background: transparent;
+}
+
 QGroupBox {
-    background: #ffffff;
-    border: 1px solid #e5e6eb;
-    border-radius: 14px;
-    margin-top: 18px;
-    padding: 14px 12px 12px 12px;
+    background: transparent;
+    border: none;
+    margin-top: 20px;
+    padding: 6px 0 0 0;
 }
 
 QGroupBox::title {
     subcontrol-origin: margin;
     subcontrol-position: top left;
-    left: 14px;
-    padding: 0 8px;
-    color: #165dff;
-    background: #ffffff;
-    font-weight: 600;
-}
-
-QLabel {
-    color: #1d2129;
-    background: transparent;
-}
-
-QTabWidget,
-QTabWidget QWidget,
-QStackedWidget,
-QStackedWidget QWidget {
-    background: #ffffff;
-}
-
-QLabel#dialogTitleLabel {
-    color: #1d2129;
+    left: 0;
+    padding: 0 0 6px 0;
+    color: #111827;
     font-size: 15px;
-    font-weight: 600;
-    padding-bottom: 6px;
-}
-
-QWidget#SettingsTitleBar {
-    background: #ffffff;
-    border-top-left-radius: 18px;
-    border-top-right-radius: 18px;
-    border-bottom: 1px solid #e5e6eb;
-}
-
-QLabel#SettingsTitleLabel {
-    color: #1d2129;
-    font-size: 14px;
-    font-weight: 600;
-    padding-left: 2px;
-}
-
-QPushButton#SettingsCloseButton {
-    min-width: 32px;
-    max-width: 32px;
-    min-height: 32px;
-    max-height: 32px;
-    padding: 0;
-    border: none;
-    border-radius: 16px;
+    font-weight: bold;
     background: transparent;
-    color: #4e5969;
-    font-size: 18px;
-    font-weight: 400;
 }
 
-QPushButton#SettingsCloseButton:hover {
-    background: #f53f3f;
-    color: #ffffff;
+/* 文件操作工具单独用灰色卡片区分 */
+QGroupBox#FileToolsGroup {
+    background: #f9fafb;
+    border: 1px solid #d1d5db;
+    border-radius: 10px;
+    margin-top: 22px;
+    padding: 12px;
 }
 
-QPushButton#SettingsCloseButton:pressed {
-    background: #c93636;
+QGroupBox#FileToolsGroup::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 12px;
+    padding: 0 6px;
+    color: #111827;
+    background: #f9fafb;
+    font-size: 15px;
+    font-weight: bold;
 }
 
 QLineEdit,
@@ -140,11 +117,13 @@ QSpinBox,
 QDoubleSpinBox,
 QListWidget {
     background: #ffffff;
-    color: #1d2129;
-    border: 1px solid #dcdfe6;
-    border-radius: 9px;
-    padding: 7px 10px;
-    selection-background-color: #165dff;
+    color: #111827;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 14px;
+    min-height: 22px;
+    selection-background-color: #2563eb;
     selection-color: #ffffff;
 }
 
@@ -155,8 +134,8 @@ QComboBox:hover,
 QSpinBox:hover,
 QDoubleSpinBox:hover,
 QListWidget:hover {
-    border-color: #a9c7ff;
-    background: #fbfdff;
+    border-color: #9ca3af;
+    background: #ffffff;
 }
 
 QLineEdit:focus,
@@ -166,7 +145,7 @@ QComboBox:focus,
 QSpinBox:focus,
 QDoubleSpinBox:focus,
 QListWidget:focus {
-    border-color: #165dff;
+    border-color: #2563eb;
 }
 
 QLineEdit:disabled,
@@ -175,155 +154,269 @@ QPlainTextEdit:disabled,
 QComboBox:disabled,
 QSpinBox:disabled,
 QDoubleSpinBox:disabled {
-    color: #86909c;
-    background: #f2f3f5;
-    border-color: #e5e6eb;
+    color: #9ca3af;
+    background: #f3f4f6;
+    border-color: #e5e7eb;
 }
 
 QComboBox {
-    padding-right: 28px;
+    padding-right: 34px;
 }
 
 QComboBox::drop-down {
-    width: 26px;
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 30px;
     border: none;
-    border-left: 1px solid #e5e6eb;
-    border-top-right-radius: 9px;
-    border-bottom-right-radius: 9px;
-    background: #f7f8fa;
-}
-
-QComboBox::down-arrow {
-    width: 0;
-    height: 0;
-    border-left: 5px solid transparent;
-    border-right: 5px solid transparent;
-    border-top: 6px solid #4e5969;
+    background: transparent;
 }
 
 QComboBox QAbstractItemView {
     background: #ffffff;
-    color: #1d2129;
-    border: 1px solid #e5e6eb;
-    border-radius: 8px;
-    padding: 4px;
-    selection-background-color: #165dff;
-    selection-color: #ffffff;
+    color: #111827;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 6px;
     outline: none;
+    selection-background-color: #eff6ff;
+    selection-color: #1d4ed8;
 }
 
-QListWidget::item {
+QComboBox QAbstractItemView::item {
     padding: 8px 10px;
-    border-radius: 7px;
-    margin: 2px;
+    border-radius: 6px;
+    min-height: 22px;
 }
 
-QListWidget::item:hover {
-    background: #e8f3ff;
+QSpinBox::up-button,
+QDoubleSpinBox::up-button {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 24px;
+    border-left: 1px solid #e5e7eb;
+    border-top-right-radius: 8px;
+    background: #f9fafb;
 }
 
-QListWidget::item:selected {
-    background: #165dff;
+QSpinBox::down-button,
+QDoubleSpinBox::down-button {
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 24px;
+    border-left: 1px solid #e5e7eb;
+    border-bottom-right-radius: 8px;
+    background: #f9fafb;
+}
+
+QSpinBox::up-button:hover,
+QSpinBox::down-button:hover,
+QDoubleSpinBox::up-button:hover,
+QDoubleSpinBox::down-button:hover {
+    background: #f3f4f6;
+}
+
+QSpinBox::up-arrow,
+QDoubleSpinBox::up-arrow {
+    image: url("__SPIN_ARROW_UP__");
+    width: 8px;
+    height: 5px;
+}
+
+QSpinBox::down-arrow,
+QDoubleSpinBox::down-arrow {
+    image: url("__SPIN_ARROW_DOWN__");
+    width: 8px;
+    height: 5px;
+}
+
+QPushButton {
+    min-height: 20px;
+    padding: 9px 16px;
+    border-radius: 8px;
+    border: 1px solid #e5e7eb;
+    background: #ffffff;
+    color: #374151;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+QPushButton:hover {
+    background: #f9fafb;
+    border-color: #d1d5db;
+}
+
+QPushButton:pressed {
+    background: #f3f4f6;
+}
+
+QPushButton:disabled {
+    color: #9ca3af;
+    background: #f9fafb;
+    border-color: #e5e7eb;
+}
+
+QDialogButtonBox QPushButton[text="OK"],
+QDialogButtonBox QPushButton[text="确定"] {
+    background: #2563eb;
+    border-color: #2563eb;
+    color: #ffffff;
+}
+
+QDialogButtonBox QPushButton[text="OK"]:hover,
+QDialogButtonBox QPushButton[text="确定"]:hover {
+    background: #1d4ed8;
+    border-color: #1d4ed8;
+    color: #ffffff;
+}
+
+/* 页面操作按钮：默认统一白底，悬浮时分别显示蓝/红/绿 */
+QPushButton#save_btn,
+QPushButton#cancel_btn,
+QPushButton#reset_btn {
+    background: #ffffff;
+    border-color: #e5e7eb;
+    color: #374151;
+}
+
+QPushButton#save_btn:hover {
+    background: #2563eb;
+    border-color: #2563eb;
+    color: #ffffff;
+}
+
+QPushButton#save_btn:pressed {
+    background: #1d4ed8;
+    border-color: #1d4ed8;
+    color: #ffffff;
+}
+
+QPushButton#cancel_btn:hover {
+    background: #dc2626;
+    border-color: #dc2626;
+    color: #ffffff;
+}
+
+QPushButton#cancel_btn:pressed {
+    background: #b91c1c;
+    border-color: #b91c1c;
+    color: #ffffff;
+}
+
+QPushButton#reset_btn:hover {
+    background: #16a34a;
+    border-color: #16a34a;
+    color: #ffffff;
+}
+
+QPushButton#reset_btn:pressed {
+    background: #15803d;
+    border-color: #15803d;
     color: #ffffff;
 }
 
 QCheckBox {
-    color: #1d2129;
+    color: #374151;
     spacing: 8px;
     background: transparent;
+    font-size: 14px;
 }
 
 QCheckBox::indicator {
     width: 18px;
     height: 18px;
-    border-radius: 5px;
-    border: 1px solid #c9cdd4;
+    border-radius: 4px;
+    border: 1px solid #d1d5db;
     background: #ffffff;
 }
 
 QCheckBox::indicator:hover {
-    border-color: #165dff;
+    border-color: #9ca3af;
 }
 
 QCheckBox::indicator:checked {
-    background: #165dff;
-    border-color: #165dff;
+    background: #2563eb;
+    border-color: #2563eb;
 }
 
-QPushButton {
-    min-height: 32px;
-    padding: 7px 16px;
-    border-radius: 16px;
-    border: 1px solid #dcdfe6;
+QSlider {
+    min-height: 24px;
+}
+
+QSlider::groove:horizontal {
+    height: 6px;
+    background: #e5e7eb;
+    border-radius: 3px;
+}
+
+QSlider::sub-page:horizontal {
+    background: #2563eb;
+    border-radius: 3px;
+}
+
+QSlider::add-page:horizontal {
+    background: #e5e7eb;
+    border-radius: 3px;
+}
+
+QSlider::handle:horizontal {
+    width: 16px;
+    height: 16px;
+    margin: -5px 0;
+    border-radius: 8px;
     background: #ffffff;
-    color: #1d2129;
-    font-weight: 500;
+    border: 1px solid #d1d5db;
 }
 
-QPushButton:hover {
-    background: #e8f3ff;
-    border-color: #165dff;
-    color: #165dff;
+QSlider::handle:horizontal:hover {
+    border-color: #2563eb;
 }
 
-QPushButton:pressed {
-    background: #d6e8ff;
-    border-color: #0e42d2;
-    color: #0e42d2;
+QSlider::handle:horizontal:pressed {
+    background: #eff6ff;
+    border-color: #2563eb;
 }
 
-QPushButton:disabled {
-    color: #c9cdd4;
-    background: #f2f3f5;
-    border-color: #e5e6eb;
+QListWidget::item {
+    padding: 8px 10px;
+    border-radius: 6px;
+    margin: 2px;
 }
 
-QPushButton#save_btn,
-QDialogButtonBox QPushButton[text="OK"],
-QDialogButtonBox QPushButton[text="确定"] {
-    background: #165dff;
-    border-color: #165dff;
-    color: #ffffff;
+QListWidget::item:hover {
+    background: #f3f4f6;
 }
 
-QPushButton#save_btn:hover,
-QDialogButtonBox QPushButton[text="OK"]:hover,
-QDialogButtonBox QPushButton[text="确定"]:hover {
-    background: #4080ff;
-    border-color: #4080ff;
-    color: #ffffff;
+QListWidget::item:selected {
+    background: #eff6ff;
+    color: #1d4ed8;
 }
 
-QPushButton#reset_btn {
-    color: #ff7d00;
-    border-color: #ffd8a8;
-    background: #fff7e8;
+QScrollArea {
+    background: transparent;
+    border: none;
 }
 
-QPushButton#reset_btn:hover {
-    color: #d25f00;
-    border-color: #ffb65d;
-    background: #fff1d6;
-}
-
-QPushButton#cancel_btn {
-    color: #4e5969;
+QScrollArea > QWidget,
+QScrollArea > QWidget > QWidget {
+    background: transparent;
 }
 
 QScrollBar:vertical {
     background: transparent;
+    border: none;
     width: 10px;
-    margin: 4px 2px 4px 2px;
+    margin: 2px 0 2px 0;
 }
 
 QScrollBar::handle:vertical {
-    background: #c9cdd4;
+    background: #d1d5db;
+    border: none;
     border-radius: 5px;
     min-height: 28px;
 }
 
 QScrollBar::handle:vertical:hover {
-    background: #a9aeb8;
+    background: #9ca3af;
 }
 
 QScrollBar::add-line:vertical,
@@ -337,18 +430,20 @@ QScrollBar::sub-page:vertical {
 
 QScrollBar:horizontal {
     background: transparent;
+    border: none;
     height: 10px;
-    margin: 2px 4px 2px 4px;
+    margin: 0 2px 0 2px;
 }
 
 QScrollBar::handle:horizontal {
-    background: #c9cdd4;
+    background: #d1d5db;
+    border: none;
     border-radius: 5px;
     min-width: 28px;
 }
 
 QScrollBar::handle:horizontal:hover {
-    background: #a9aeb8;
+    background: #9ca3af;
 }
 
 QScrollBar::add-line:horizontal,
@@ -360,12 +455,22 @@ QScrollBar::sub-page:horizontal {
     width: 0;
 }
 
+QToolTip {
+    background: #ffffff;
+    color: #111827;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-family: "Microsoft YaHei UI";
+    font-size: 12px;
+}
+
 QMessageBox {
     background: #ffffff;
 }
 
 QMessageBox QLabel {
-    color: #1d2129;
+    color: #111827;
 }
 """
 
@@ -443,8 +548,34 @@ QFrame#TrayPopupSeparator {
 """
 
 
+def _asset_url(filename: str) -> str:
+    """定位 QSS 使用的图片资源；返回绝对路径（正斜杠）."""
+    try:
+        from src.utils.resource_finder import resource_finder
+
+        path = resource_finder.find_file(f"assets/image/{filename}")
+        if path is not None:
+            return path.resolve().as_posix()
+    except Exception:
+        pass
+    return ""
+
+
 def settings_dialog_qss() -> str:
-    return SETTINGS_DIALOG_QSS
+    """返回设置对话框样式，并注入下拉/数值框箭头图片路径."""
+    qss = SETTINGS_DIALOG_QSS
+    tokens = {
+        "__SPIN_ARROW_UP__": "spin_arrow_up.png",
+        "__SPIN_ARROW_DOWN__": "spin_arrow_down.png",
+    }
+    for token, filename in tokens.items():
+        url = _asset_url(filename)
+        if url:
+            qss = qss.replace(token, url)
+        else:
+            # 资源缺失时去掉 image 行，避免 QSS 去加载不存在的文件
+            qss = qss.replace(f'    image: url("{token}");\n', "")
+    return qss
 
 
 def tray_menu_qss() -> str:
@@ -462,8 +593,8 @@ def apply_settings_dialog_style(widget) -> None:
 
     layout = widget.layout()
     if layout:
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(14)
+        layout.setContentsMargins(24, 22, 24, 22)
+        layout.setSpacing(16)
 
 
 def apply_tray_menu_style(menu) -> None:

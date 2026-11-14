@@ -1,9 +1,93 @@
 import io
 import logging
 import sys
+from datetime import datetime
 from logging.handlers import TimedRotatingFileHandler
 
-from colorlog import ColoredFormatter
+_RESET = "\033[0m"
+_DIM = "\033[2m"
+_BLUE = "\033[34m"
+_LEVEL_COLORS = {
+    logging.DEBUG: "\033[36m",
+    logging.INFO: "\033[32m",
+    logging.WARNING: "\033[33m",
+    logging.ERROR: "\033[31m",
+    logging.CRITICAL: "\033[1;37;41m",
+}
+
+
+def _shorten_name(name: str, max_length: int = 25) -> str:
+    """缩写 logger 名称，例如 src.ui.shared.bridge.event_bridge."""
+    if len(name) <= max_length:
+        return name
+    parts = name.split(".")
+    if len(parts) == 1:
+        return name[:max_length]
+    result = []
+    for index, part in enumerate(parts[:-1]):
+        result.append(part[:3] if index == 0 else part[0])
+    result.append(parts[-1])
+    return ".".join(result)[:max_length]
+
+
+def _supports_color(stream) -> bool:
+    """判断当前终端是否支持 ANSI 颜色."""
+    try:
+        if not hasattr(stream, "isatty") or not stream.isatty():
+            return False
+    except Exception:
+        return False
+
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            # -11=STD_OUTPUT_HANDLE, -12=STD_ERROR_HANDLE；日志走 stderr，两个都开启 VT
+            for handle in (-11, -12):
+                kernel32.SetConsoleMode(kernel32.GetStdHandle(handle), 7)
+        except Exception:
+            return False
+    return True
+
+
+class _ProjectFormatter(logging.Formatter):
+    """统一日志格式：时间 级别 [缩写模块] 消息（+ 非主线程名）."""
+
+    def __init__(self, use_colors: bool = False):
+        super().__init__()
+        self.use_colors = use_colors
+
+    def format(self, record: logging.LogRecord) -> str:
+        timestamp = datetime.fromtimestamp(record.created).strftime(
+            "%Y-%m-%d %H:%M:%S.%f"
+        )[:-3]
+        level = record.levelname.ljust(8)
+        name = _shorten_name(record.name)
+        message = record.getMessage()
+
+        if self.use_colors:
+            timestamp = f"{_DIM}{timestamp}{_RESET}"
+            level = f"{_LEVEL_COLORS.get(record.levelno, '')}{level}{_RESET}"
+            name = f"{_BLUE}[{name}]{_RESET}"
+            if record.levelno >= logging.ERROR:
+                message = f"{_LEVEL_COLORS[logging.ERROR]}{message}{_RESET}"
+        else:
+            name = f"[{name}]"
+
+        if record.threadName != "MainThread":
+            if self.use_colors:
+                message = f"{message} {_DIM}({record.threadName}){_RESET}"
+            else:
+                message = f"{message} ({record.threadName})"
+
+        line = f"{timestamp} {level} {name} {message}"
+        if record.exc_info:
+            exception_text = self.formatException(record.exc_info)
+            if self.use_colors:
+                exception_text = f"{_LEVEL_COLORS[logging.ERROR]}{exception_text}{_RESET}"
+            line = f"{line}\n{exception_text}"
+        return line
 
 
 def _resolve_log_dir():
@@ -13,12 +97,11 @@ def _resolve_log_dir():
     Program Files 等只读位置时仍可写；失败时回退到项目根目录的 logs。
     返回 None 表示两者均不可用（此时仅使用控制台日志）。
     """
-    from .resource_finder import get_project_root, get_user_data_dir
+    from .resource_finder import get_log_dir, get_project_root
 
-    # 首选：用户数据目录
+    # 首选：用户数据目录（已应用 PATHS.LOG_DIR / XIAOZHI_LOG_DIR 覆盖）
     try:
-        data_dir = get_user_data_dir(create=True)
-        log_dir = data_dir / "logs"
+        log_dir = get_log_dir(create=True)
         log_dir.mkdir(parents=True, exist_ok=True)
         return log_dir
     except Exception:
@@ -55,6 +138,16 @@ def setup_logging():
     """
     配置日志系统.
     """
+    # 先创建配置单例：它会应用 PATHS.LOG_DIR 等目录覆盖，
+    # 这样本次启动的日志就能写到用户自定义目录。
+    try:
+        from .config_manager import ConfigManager
+
+        ConfigManager.get_instance()
+    except Exception:
+        # 配置损坏时不应阻塞日志初始化，退回默认目录
+        pass
+
     # 创建根日志记录器
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)  # 设置根日志级别
@@ -63,31 +156,13 @@ def setup_logging():
     if root_logger.handlers:
         root_logger.handlers.clear()
 
-    # 创建格式化器
-    formatter = logging.Formatter(
-        "%(asctime)s[%(name)s] - %(levelname)s - %(message)s - %(threadName)s"
-    )
-
-    # 控制台颜色格式化器
-    color_formatter = ColoredFormatter(
-        "%(green)s%(asctime)s%(reset)s[%(blue)s%(name)s%(reset)s] - "
-        "%(log_color)s%(levelname)s%(reset)s - %(green)s%(message)s%(reset)s - "
-        "%(cyan)s%(threadName)s%(reset)s",
-        log_colors={
-            "DEBUG": "cyan",
-            "INFO": "white",
-            "WARNING": "yellow",
-            "ERROR": "red",
-            "CRITICAL": "red,bg_white",
-        },
-        secondary_log_colors={"asctime": {"green": "green"}, "name": {"blue": "blue"}},
-    )
-
     # 控制台处理器（windowed 模式下可能为 None）
     console_handler = _make_console_handler()
     if console_handler is not None:
         console_handler.setLevel(logging.INFO)
-        console_handler.setFormatter(color_formatter)
+        console_handler.setFormatter(
+            _ProjectFormatter(use_colors=_supports_color(console_handler.stream))
+        )
         root_logger.addHandler(console_handler)
 
     # 文件处理器：目录不可写时降级为仅控制台日志，不阻塞程序启动
@@ -105,7 +180,7 @@ def setup_logging():
             )
             file_handler.setLevel(logging.INFO)
             file_handler.suffix = "%Y-%m-%d.log"  # 日志文件后缀格式
-            file_handler.setFormatter(formatter)
+            file_handler.setFormatter(_ProjectFormatter(use_colors=False))
             root_logger.addHandler(file_handler)
         except Exception as e:
             # 文件日志初始化失败不应导致程序崩溃（此时控制台日志仍可用）
@@ -115,6 +190,22 @@ def setup_logging():
                     sys.stderr.write(f"文件日志初始化失败，仅使用控制台日志: {e}\n")
                 except Exception:
                     pass
+
+    # 第三方库日志保持安静，避免刷屏
+    for name in (
+        "urllib3",
+        "websockets",
+        "asyncio",
+        "qasync",
+        "paho",
+        "PIL",
+        "sounddevice",
+        "matplotlib",
+    ):
+        try:
+            logging.getLogger(name).setLevel(logging.WARNING)
+        except Exception:
+            pass
 
     # 输出日志配置信息
     if log_file is not None:

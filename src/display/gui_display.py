@@ -13,7 +13,7 @@ from abc import ABCMeta
 from pathlib import Path
 from typing import Callable, Optional
 
-from PyQt5.QtCore import (
+from PySide6.QtCore import (
     QAbstractNativeEventFilter,
     QEvent,
     QEasingCurve,
@@ -24,16 +24,17 @@ from PyQt5.QtCore import (
     Qt,
     QTimer,
     QUrl,
-    pyqtProperty,
-    pyqtSignal,
+    Property,
+    Signal,
 )
-from PyQt5.QtGui import QDrag, QCursor, QFont
-from PyQt5.QtQuickWidgets import QQuickWidget
-from PyQt5.QtWidgets import QApplication, QMessageBox, QVBoxLayout, QWidget
+from PySide6.QtGui import QDrag, QCursor, QFont
+from PySide6.QtQuickWidgets import QQuickWidget
+from PySide6.QtWidgets import QApplication, QMessageBox, QVBoxLayout, QWidget
 
 from src.display.base_display import BaseDisplay
 from src.display.file_tray_model import FileIconProvider, FileTrayModel
 from src.display.gui_display_model import GuiDisplayModel
+from src.utils.qt_compat import ensure_quick_controls_style, primary_available_geometry
 from src.utils.resource_finder import find_assets_dir
 
 
@@ -80,8 +81,8 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
     """GUI 显示类 - 基于 QML 的现代化胶囊状界面"""
 
     # 胶囊形态让出/收起通知：供 UI 插件决定是否恢复音乐歌词
-    listeningFinished = pyqtSignal()
-    ttsHidden = pyqtSignal()
+    listeningFinished = Signal()
+    ttsHidden = Signal()
 
     # 常量定义
     EMOTION_EXTENSIONS = (".gif", ".png", ".jpg", ".jpeg", ".webp")
@@ -741,8 +742,7 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         """
         设置窗口初始位置到屏幕正上方居中（待机短横线位置）
         """
-        desktop = QApplication.desktop()
-        screen_rect = desktop.availableGeometry()
+        screen_rect = primary_available_geometry()
         x = screen_rect.left() + (screen_rect.width() - self.HIDDEN_SIZE[0]) // 2
         y = self.TOP_MARGIN
 
@@ -761,8 +761,7 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
             )
 
             # 获取屏幕尺寸（可用区域，排除任务栏等）
-            desktop = QApplication.desktop()
-            screen_rect = desktop.availableGeometry()
+            screen_rect = primary_available_geometry()
             screen_width = screen_rect.width()
             screen_height = screen_rect.height()
 
@@ -793,8 +792,7 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
             self.logger.error(f"计算窗口大小失败: {e}", exc_info=True)
             # 错误时返回屏幕 50%
             try:
-                desktop = QApplication.desktop()
-                screen_rect = desktop.availableGeometry()
+                screen_rect = primary_available_geometry()
                 return (
                     (int(screen_rect.width() * 0.5), int(screen_rect.height() * 0.5)),
                     False,
@@ -806,6 +804,7 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         """
         加载 QML 界面 - 胶囊状界面.
         """
+        ensure_quick_controls_style()
         self.qml_widget = QQuickWidget()
         self.qml_widget.setResizeMode(QQuickWidget.SizeRootObjectToView)
         self.qml_widget.setFocusPolicy(Qt.StrongFocus)
@@ -1041,8 +1040,7 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         """中转站窗口尺寸变化：始终保持在主屏顶部居中，并做平滑几何过渡。"""
         if not self.tray_root:
             return
-        desktop = QApplication.desktop()
-        screen_rect = desktop.availableGeometry()
+        screen_rect = primary_available_geometry()
         new_x = screen_rect.left() + (screen_rect.width() - width) // 2
         new_y = screen_rect.top()
         self._tray_target_rect = QRect(new_x, new_y, width, height)
@@ -1236,7 +1234,7 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
             from src.views.settings import SettingsWindow
 
             settings_window = SettingsWindow()
-            settings_window.exec_()
+            settings_window.exec()
         except Exception as e:
             self.logger.error(f"打开设置窗口失败: {e}", exc_info=True)
 
@@ -1266,8 +1264,7 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         if not self.root:
             return
 
-        desktop = QApplication.desktop()
-        screen_rect = desktop.availableGeometry()
+        screen_rect = primary_available_geometry()
         target_width = width or self.root.width()
         x = screen_rect.left() + (screen_rect.width() - target_width) // 2
         self.root.move(x, self.TOP_MARGIN)
@@ -1299,8 +1296,7 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
                 new_y = self.TOP_MARGIN
 
             # 确保窗口不超出屏幕边界
-            desktop = QApplication.desktop()
-            screen_rect = desktop.availableGeometry()
+            screen_rect = primary_available_geometry()
             # 展开歌词（非折叠指示器）时回到屏幕顶部居中
             should_restore_music_position = (
                 view_mode == "tts"
@@ -1556,7 +1552,7 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
                 drag.setPixmap(pixmap)
 
             # 支持复制 + 移动，默认复制；拖放中按修饰键可动态切换
-            drag.exec_(Qt.CopyAction | Qt.MoveAction, Qt.CopyAction)
+            drag.exec(Qt.CopyAction | Qt.MoveAction, Qt.CopyAction)
             # 拖出结束后按磁盘实际存在性清理：条目被"移动/剪切"到别处或拖入
             # 回收站后，源路径已不存在，此时从中转站移除其引用。复制到别处时
             # 源文件仍在，不会被误删。降序遍历避免删除时索引偏移。

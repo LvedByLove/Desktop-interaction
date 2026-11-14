@@ -578,39 +578,55 @@ class Application:
     async def shutdown(self):
         if not self.running:
             return
-        logger.info("正在关闭Application...")
+        logger.info("收到关闭请求，开始关闭 Application...")
         self.running = False
 
         try:
             # 取消所有登记任务
-            if self._tasks:
-                for t in list(self._tasks):
-                    if not t.done():
-                        t.cancel()
+            pending = [t for t in self._tasks if not t.done()]
+            if pending:
+                logger.info(f"正在取消 {len(pending)} 个任务...")
+                for task in pending:
+                    task.cancel()
                 await asyncio.gather(*self._tasks, return_exceptions=True)
-                self._tasks.clear()
+                logger.info("所有任务已取消")
+            self._tasks.clear()
 
             # 关闭协议（限时，避免阻塞退出）
             if self.protocol:
+                logger.info("正在关闭协议通道...")
                 try:
                     await asyncio.wait_for(
                         self.protocol.close_audio_channel(), timeout=2.0
                     )
+                    logger.info("协议通道已关闭")
                 except asyncio.TimeoutError:
                     logger.warning("关闭协议超时，跳过等待")
                 except Exception as e:
                     logger.error(f"关闭协议失败: {e}")
 
-            # 插件：stop/shutdown
+            # 插件：stop/shutdown（按优先级逆序，音频插件最后关闭）
+            logger.info("正在停止插件...")
             try:
                 await self.plugins.stop_all()
-            except Exception:
-                pass
+                logger.info("插件已停止")
+            except asyncio.CancelledError:
+                logger.warning("停止插件时收到取消异常，继续关闭")
+            except Exception as e:
+                logger.warning(f"停止插件时出错: {e}")
             try:
+                logger.info("正在关闭插件...")
                 await self.plugins.shutdown_all()
-            except Exception:
-                pass
+                logger.info("插件已全部关闭")
+            except asyncio.CancelledError:
+                logger.warning("关闭插件时收到取消异常，继续关闭")
+            except Exception as e:
+                logger.warning(f"关闭插件时出错: {e}")
 
+            # 强制回收一次，释放 soxr/onnx 等扩展对象
+            import gc
+
+            gc.collect()
             logger.info("Application 关闭完成")
         except Exception as e:
             logger.error(f"关闭应用时出错: {e}", exc_info=True)

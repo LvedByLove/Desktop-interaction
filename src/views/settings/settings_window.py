@@ -2,20 +2,27 @@ import os
 import sys
 from pathlib import Path
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QApplication, QDialog, QMessageBox, QPushButton, QTabWidget
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QFormLayout,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from src.utils.config_manager import ConfigManager
 from src.utils.logging_config import get_logger
 from src.utils.resource_finder import resource_finder
+from src.views.components.sidebar_button import SidebarButton
 from src.views.theme import apply_settings_dialog_style
-from src.views.settings.components.audio import AudioWidget
-from src.views.settings.components.camera import CameraWidget
-from src.views.settings.components.music_cache import MusicCacheWidget
-from src.views.settings.components.shortcuts_settings import ShortcutsSettingsWidget
-from src.views.settings.components.system_options import SystemOptionsWidget
-from src.views.settings.components.wake_word import WakeWordWidget
 
 
 class SettingsWindow(QDialog):
@@ -30,14 +37,24 @@ class SettingsWindow(QDialog):
 
         # 组件引用
         self.system_options_tab = None
+        self.mcp_tools_tab = None
         self.wake_word_tab = None
         self.camera_tab = None
         self.audio_tab = None
         self.shortcuts_tab = None
+        self.data_directory_tab = None
         self.music_cache_tab = None
 
         # UI控件
         self.ui_controls = {}
+
+        # 懒加载页面状态
+        self._tab_specs = []
+        self._tab_built = []
+        self._nav_buttons = []
+        self._stack = None
+        self._section_title = None
+        self._status_label = None
 
         # 初始化UI
         self._setup_ui()
@@ -45,13 +62,9 @@ class SettingsWindow(QDialog):
 
     def _setup_ui(self):
         """
-        设置UI界面.
+        设置UI界面（模板风格：左侧导航 + 右侧白色圆角卡片）.
         """
         try:
-            from PyQt5 import uic
-
-            ui_path = Path(__file__).parent / "settings_window.ui"
-            uic.loadUi(str(ui_path), self)
             self.setWindowFlags(
                 Qt.Window
                 | Qt.WindowMinimizeButtonHint
@@ -61,21 +74,100 @@ class SettingsWindow(QDialog):
             # 确保不保持在最上层（主窗口带 WindowStaysOnTopHint，避免被连带置顶）
             self.setWindowFlag(Qt.WindowStaysOnTopHint, False)
             self.setAttribute(Qt.WA_StyledBackground, True)
+            self.setWindowTitle("Desktop-interaction")
             self._set_window_icon()
+            self.setObjectName("SettingsWindow")
 
-            # 获取UI控件的引用
-            self._get_ui_controls()
-
-            # 添加各个组件选项卡
+            self._build_layout()
             self._add_component_tabs()
 
             apply_settings_dialog_style(self)
-            self.resize(720, 620)
+            self.resize(920, 760)
+            self.setMinimumSize(760, 580)
             self._center_on_screen()
 
         except Exception as e:
             self.logger.error(f"设置UI失败: {e}", exc_info=True)
             raise
+
+    def _build_layout(self):
+        """构建页面骨架：标题区 / 左侧导航 / 内容卡片 / 底部操作栏."""
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 22, 24, 22)
+        root.setSpacing(16)
+
+        # 页面标题
+        header = QVBoxLayout()
+        header.setSpacing(2)
+        self._page_title = QLabel("参数设置")
+        self._page_title.setObjectName("SettingsPageTitle")
+        self._page_subtitle = QLabel("管理语音、设备、快捷方式与音乐")
+        self._page_subtitle.setObjectName("SettingsPageSubtitle")
+        header.addWidget(self._page_title)
+        header.addWidget(self._page_subtitle)
+        root.addLayout(header)
+
+        body = QHBoxLayout()
+        body.setSpacing(24)
+
+        # 左侧导航
+        self._sidebar = QWidget()
+        self._sidebar.setObjectName("SettingsSidebar")
+        self._sidebar.setFixedWidth(210)
+        self._sidebar_layout = QVBoxLayout(self._sidebar)
+        self._sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        self._sidebar_layout.setSpacing(4)
+        body.addWidget(self._sidebar)
+
+        # 右侧内容卡片
+        self._content_card = QFrame()
+        self._content_card.setObjectName("SettingsContentCard")
+        self._content_card.setAttribute(Qt.WA_StyledBackground, True)
+        card_layout = QVBoxLayout(self._content_card)
+        card_layout.setContentsMargins(24, 22, 24, 18)
+        card_layout.setSpacing(14)
+
+        self._section_title = QLabel("系统选项")
+        self._section_title.setObjectName("SettingsSectionTitle")
+        card_layout.addWidget(self._section_title)
+
+        self._stack = QStackedWidget()
+        self._stack.setObjectName("SettingsStack")
+        card_layout.addWidget(self._stack, 1)
+
+        separator = QFrame()
+        separator.setObjectName("SettingsSeparator")
+        separator.setFixedHeight(1)
+        card_layout.addWidget(separator)
+
+        # 底部操作栏
+        footer = QHBoxLayout()
+        footer.setSpacing(10)
+        self._status_label = QLabel("修改后点击「保存」生效")
+        self._status_label.setObjectName("SettingsStatusLabel")
+        footer.addWidget(self._status_label, 1)
+
+        # 保存成功提示：显示几秒后自动恢复为默认提示，窗口保持打开
+        self._status_timer = QTimer(self)
+        self._status_timer.setSingleShot(True)
+        self._status_timer.timeout.connect(self._reset_status_label)
+
+        self.ui_controls["reset_btn"] = QPushButton("重置")
+        self.ui_controls["reset_btn"].setObjectName("reset_btn")
+        self.ui_controls["cancel_btn"] = QPushButton("取消")
+        self.ui_controls["cancel_btn"].setObjectName("cancel_btn")
+        self.ui_controls["save_btn"] = QPushButton("保存")
+        self.ui_controls["save_btn"].setObjectName("save_btn")
+        for key in ("reset_btn", "cancel_btn", "save_btn"):
+            self.ui_controls[key].setCursor(Qt.PointingHandCursor)
+            self.ui_controls[key].setMinimumWidth(88)
+        footer.addWidget(self.ui_controls["reset_btn"])
+        footer.addWidget(self.ui_controls["cancel_btn"])
+        footer.addWidget(self.ui_controls["save_btn"])
+        card_layout.addLayout(footer)
+
+        body.addWidget(self._content_card, 1)
+        root.addLayout(body, 1)
 
     def _set_window_icon(self):
         """
@@ -105,58 +197,187 @@ class SettingsWindow(QDialog):
 
     def _add_component_tabs(self):
         """
-        添加各个组件选项卡.
+        添加左侧导航与内容页.
+
+        只创建占位页；真正重的组件（导入 cv2/sounddevice、枚举设备等）
+        等到用户切换到对应页时再懒加载，避免打开设置面板时明显卡顿。
         """
         try:
-            # 获取TabWidget
-            tab_widget = self.findChild(QTabWidget, "tabWidget")
-            if not tab_widget:
-                self.logger.error("未找到TabWidget控件")
-                return
+            self._tab_specs = [
+                ("系统选项", self._build_system_options_tab, "sliders"),
+                ("MCP 工具", self._build_mcp_tools_tab, "grid"),
+                ("唤醒词", self._build_wake_word_tab, "mic"),
+                ("摄像头", self._build_camera_tab, "camera"),
+                ("音频设备", self._build_audio_tab, "speaker"),
+                ("数据目录", self._build_data_directory_tab, "database"),
+                ("音乐", self._build_music_cache_tab, "music"),
+            ]
+            self._tab_built = [False] * len(self._tab_specs)
+            self._nav_buttons = []
 
-            # 清空现有选项卡（如果有的话）
-            tab_widget.clear()
+            for index, (title, _, icon_kind) in enumerate(self._tab_specs):
+                button = SidebarButton(title, icon_kind)
+                button.clicked.connect(
+                    lambda _checked=False, i=index: self._on_nav_clicked(i)
+                )
+                self._sidebar_layout.addWidget(button)
+                self._nav_buttons.append(button)
+                # 占位页，切换时再替换为真实组件
+                self._stack.addWidget(QWidget())
 
-            # 创建并添加系统选项组件
-            self.system_options_tab = SystemOptionsWidget()
-            tab_widget.addTab(self.system_options_tab, "系统选项")
-            self.system_options_tab.settings_changed.connect(self._on_settings_changed)
+            self._sidebar_layout.addStretch(1)
 
-            # 创建并添加唤醒词组件
-            self.wake_word_tab = WakeWordWidget()
-            tab_widget.addTab(self.wake_word_tab, "唤醒词")
-            self.wake_word_tab.settings_changed.connect(self._on_settings_changed)
-
-            # 创建并添加摄像头组件
-            self.camera_tab = CameraWidget()
-            tab_widget.addTab(self.camera_tab, "摄像头")
-            self.camera_tab.settings_changed.connect(self._on_settings_changed)
-
-            # 创建并添加音频设备组件
-            self.audio_tab = AudioWidget()
-            tab_widget.addTab(self.audio_tab, "音频设备")
-            self.audio_tab.settings_changed.connect(self._on_settings_changed)
-
-            # 创建并添加快捷键设置组件
-            self.shortcuts_tab = ShortcutsSettingsWidget()
-            tab_widget.addTab(self.shortcuts_tab, "快捷键")
-            self.shortcuts_tab.settings_changed.connect(self._on_settings_changed)
-
-            # 创建并添加音乐与缓存组件
-            self.music_cache_tab = MusicCacheWidget()
-            tab_widget.addTab(self.music_cache_tab, "音乐与缓存")
-            self.music_cache_tab.settings_changed.connect(self._on_settings_changed)
-
-            self.logger.debug("成功添加所有组件选项卡")
+            if self._nav_buttons:
+                self._nav_buttons[0].setChecked(True)
+            self._on_nav_clicked(0)
+            self.logger.debug("设置导航已建立（按需懒加载）")
 
         except Exception as e:
-            self.logger.error(f"添加组件选项卡失败: {e}", exc_info=True)
+            self.logger.error(f"添加设置页失败: {e}", exc_info=True)
+
+    def _on_nav_clicked(self, index: int):
+        """左侧导航点击：懒加载并切换到对应页面."""
+        if index < 0 or index >= len(self._tab_specs):
+            return
+        self._ensure_tab(index)
+        self._stack.setCurrentIndex(index)
+        if 0 <= index < len(self._nav_buttons):
+            self._nav_buttons[index].setChecked(True)
+            self._section_title.setText(self._tab_specs[index][0])
+
+    def _ensure_tab(self, index: int):
+        """切换到某个页面时才构建其真实内容."""
+        try:
+            if index < 0 or index >= len(self._tab_specs):
+                return
+            if self._tab_built[index]:
+                return
+            self._tab_built[index] = True
+
+            title, builder, _ = self._tab_specs[index]
+            placeholder = self._stack.widget(index)
+            widget = builder()
+            if widget is None:
+                self._tab_built[index] = False
+                return
+
+            # 只让页面容器透明，避免 QSS 的宽泛规则影响页面内部的按钮/输入框
+            widget.setProperty("settingsPage", True)
+            self._stack.removeWidget(placeholder)
+            self._stack.insertWidget(index, widget)
+            try:
+                widget.style().unpolish(widget)
+                widget.style().polish(widget)
+            except Exception:
+                pass
+            if placeholder is not None:
+                placeholder.deleteLater()
+
+            if hasattr(widget, "settings_changed"):
+                widget.settings_changed.connect(self._on_settings_changed)
+
+            # 模板使用「标签在上、输入框在下」的表单；音频页为节省高度保留左右布局，
+            # 让底部设备信息日志框无需滚动即可见。
+            compact_form = title == "音频设备"
+            for form in widget.findChildren(QFormLayout):
+                if compact_form:
+                    form.setRowWrapPolicy(QFormLayout.DontWrapRows)
+                    form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                else:
+                    form.setRowWrapPolicy(QFormLayout.WrapAllRows)
+                    form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                form.setVerticalSpacing(10)
+                form.setHorizontalSpacing(12)
+
+            self.logger.debug(f"设置页已加载: {title}")
+        except Exception as e:
+            # 允许用户再次切换该页时重试，而不是永久显示空白占位
+            if 0 <= index < len(self._tab_built):
+                self._tab_built[index] = False
+            self.logger.error(f"加载设置页失败 (index={index}): {e}", exc_info=True)
+
+    # ---- 各标签页构建器（内部 import，避免启动时加载重依赖）----
+
+    def _build_system_options_tab(self):
+        from src.views.settings.components.shortcuts_settings import (
+            ShortcutsSettingsWidget,
+        )
+        from src.views.settings.components.system_options import SystemOptionsWidget
+
+        self.system_options_tab = SystemOptionsWidget()
+
+        # 快捷键不再是独立页签，作为「系统选项」页的一个区块
+        self.shortcuts_tab = ShortcutsSettingsWidget(embedded=True)
+        self.system_options_tab.add_section("快捷键", self.shortcuts_tab)
+        try:
+            self.shortcuts_tab.settings_changed.connect(
+                self.system_options_tab._emit_settings_changed
+            )
+        except Exception:
+            pass
+        return self.system_options_tab
+
+    def _build_mcp_tools_tab(self):
+        from src.views.settings.components.mcp_tools import McpToolsWidget
+
+        self.mcp_tools_tab = McpToolsWidget()
+        return self.mcp_tools_tab
+
+    def _build_wake_word_tab(self):
+        from src.views.settings.components.wake_word import WakeWordWidget
+
+        self.wake_word_tab = WakeWordWidget()
+        return self.wake_word_tab
+
+    def _build_camera_tab(self):
+        from src.views.settings.components.camera import CameraWidget
+
+        self.camera_tab = CameraWidget()
+        return self.camera_tab
+
+    def _build_audio_tab(self):
+        from src.views.settings.components.audio import AudioWidget
+
+        self.audio_tab = AudioWidget()
+        return self.audio_tab
+
+    def _build_data_directory_tab(self):
+        from src.views.settings.components.data_directory import DataDirectoryWidget
+
+        self.data_directory_tab = DataDirectoryWidget()
+        return self.data_directory_tab
+
+    def _build_music_cache_tab(self):
+        from src.views.settings.components.music_cache import MusicCacheWidget
+
+        self.music_cache_tab = MusicCacheWidget()
+        return self.music_cache_tab
 
     def _on_settings_changed(self):
         """
         设置变更回调.
         """
         # 可以在此添加一些提示或者其他逻辑
+
+    def _show_status(self, text: str, *, success: bool = True, duration: int = 3000):
+        """在底部显示临时提示，超时后自动恢复默认文案."""
+        if not hasattr(self, "_status_timer"):
+            return
+        color = "#16a34a" if success else "#dc2626"
+        self._status_label.setText(text)
+        self._status_label.setStyleSheet(
+            f"color: {color}; font-size: 13px; font-weight: 600;"
+        )
+        self._status_timer.stop()
+        self._status_timer.start(duration)
+
+    def _reset_status_label(self):
+        """恢复底部默认提示文案与颜色."""
+        try:
+            self._status_label.setText("修改后点击「保存」生效")
+            self._status_label.setStyleSheet("")
+        except Exception:
+            pass
 
     def _get_ui_controls(self):
         """
@@ -191,31 +412,93 @@ class SettingsWindow(QDialog):
     def _on_save_clicked(self):
         """
         保存按钮点击事件.
+
+        只有真正需要重启的配置变更才弹窗；音乐、快捷键、开机自启动等
+        热更新项保存后直接生效并关闭窗口。
         """
         try:
-            # 收集所有配置数据
+            before = self.config_manager.snapshot()
             success = self._save_all_config()
+            if not success:
+                self._show_status("配置保存失败", success=False, duration=4000)
+                QMessageBox.warning(self, "错误", "配置保存失败，请检查输入的值。")
+                return
 
-            if success:
-                # 显示保存成功并提示重启
+            after = self.config_manager.snapshot()
+            changed = self._diff_config(before, after)
+
+            # 快捷键可以运行时重载，不需要重启
+            if any(path.startswith("SHORTCUTS.") for path in changed):
+                self._reload_shortcuts_runtime()
+
+            needs_restart = any(self._requires_restart(path) for path in changed)
+            if needs_restart:
                 reply = QMessageBox.question(
                     self,
                     "配置保存成功",
-                    "配置已保存成功！\n\n为了使配置生效，建议重启软件。\n是否现在重启？",
+                    "部分设置需要重启才能生效。\n\n是否现在重启？",
                     QMessageBox.Yes | QMessageBox.No,
                     QMessageBox.Yes,
                 )
-
                 if reply == QMessageBox.Yes:
                     self._restart_application()
-                else:
-                    self.accept()
+                    return
+                self._show_status("配置已保存，部分设置重启后生效")
             else:
-                QMessageBox.warning(self, "错误", "配置保存失败，请检查输入的值。")
+                # 热更新项：不弹窗、不关闭窗口，仅显示临时提示
+                self._show_status("配置已保存并已生效")
 
         except Exception as e:
             self.logger.error(f"保存配置失败: {e}", exc_info=True)
             QMessageBox.critical(self, "错误", f"保存配置时发生错误: {str(e)}")
+
+    @staticmethod
+    def _diff_config(before, after, prefix: str = "") -> list:
+        """递归比较两份配置，返回发生变化的点分路径列表."""
+        if isinstance(before, dict) and isinstance(after, dict):
+            changes = []
+            for key in set(before) | set(after):
+                path = f"{prefix}.{key}" if prefix else str(key)
+                changes.extend(
+                    SettingsWindow._diff_config(before.get(key), after.get(key), path)
+                )
+            return changes
+        return [prefix] if before != after else []
+
+    @staticmethod
+    def _requires_restart(path: str) -> bool:
+        """判断某个配置项是否需要重启才能生效."""
+        # 热更新项：保存后立即生效
+        if path == "SYSTEM_OPTIONS.AUTOSTART":
+            return False
+        if path.startswith("MUSIC.") or path.startswith("SHORTCUTS."):
+            return False
+        if path == "MCP_FILE_TOOLS.ROOT":
+            return False
+        if path.startswith("MCP_FILE_TOOLS."):
+            # 启用/关闭文件工具需要重启后重新注册工具列表
+            return True
+        # 其余（网络/音频/摄像头/唤醒词/数据目录/MCP 等）需要重启
+        return True
+
+    def _reload_shortcuts_runtime(self):
+        """保存快捷键后让运行中的快捷键插件立即重新加载配置."""
+        try:
+            from src.application import Application
+
+            app = Application.get_instance()
+            plugin = app.plugins.get_plugin("shortcuts") if app else None
+            if plugin is None or not hasattr(plugin, "reload_from_config"):
+                return
+
+            if getattr(app, "_main_loop", None) and not app._main_loop.is_closed():
+                app.spawn(plugin.reload_from_config(), name="settings:reload_shortcuts")
+            else:
+                import asyncio
+
+                asyncio.get_running_loop().create_task(plugin.reload_from_config())
+        except Exception as e:
+            self.logger.warning(f"运行时重载快捷键失败: {e}")
 
     def _save_all_config(self) -> bool:
         """
@@ -229,6 +512,10 @@ class SettingsWindow(QDialog):
             if self.system_options_tab:
                 system_config = self.system_options_tab.get_config_data()
                 all_config_data.update(system_config)
+
+            # MCP 工具开关
+            if self.mcp_tools_tab:
+                all_config_data.update(self.mcp_tools_tab.get_config_data())
 
             # 唤醒词配置
             if self.wake_word_tab:
@@ -252,7 +539,11 @@ class SettingsWindow(QDialog):
                 # 快捷键组件有自己的保存方法
                 self.shortcuts_tab.apply_settings()
 
-            # 音乐与缓存配置
+            # 数据目录配置
+            if self.data_directory_tab:
+                all_config_data.update(self.data_directory_tab.get_config_data())
+
+            # 音乐配置
             if self.music_cache_tab:
                 music_cache_config = self.music_cache_tab.get_config_data()
                 all_config_data.update(music_cache_config)
@@ -296,6 +587,9 @@ class SettingsWindow(QDialog):
             if self.system_options_tab:
                 self.system_options_tab.reset_to_defaults()
 
+            if self.mcp_tools_tab:
+                self.mcp_tools_tab.reset_to_defaults()
+
             if self.wake_word_tab:
                 self.wake_word_tab.reset_to_defaults()
 
@@ -307,6 +601,9 @@ class SettingsWindow(QDialog):
 
             if self.shortcuts_tab:
                 self.shortcuts_tab.reset_to_defaults()
+
+            if self.data_directory_tab:
+                self.data_directory_tab.reset_to_defaults()
 
             if self.music_cache_tab:
                 self.music_cache_tab.reset_to_defaults()
@@ -343,7 +640,7 @@ class SettingsWindow(QDialog):
         try:
             import subprocess
 
-            from PyQt5.QtWidgets import QApplication
+            from PySide6.QtWidgets import QApplication
 
             # 获取当前执行的程序路径和参数
             python = sys.executable
@@ -399,7 +696,7 @@ class SettingsWindow(QDialog):
             # "Event loop stopped before Future completed"。
             import asyncio
 
-            from PyQt5.QtCore import QTimer
+            from PySide6.QtCore import QTimer
 
             from src.application import Application
 

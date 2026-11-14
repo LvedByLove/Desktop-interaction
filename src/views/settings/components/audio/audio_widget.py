@@ -4,12 +4,13 @@ from pathlib import Path
 
 import numpy as np
 import sounddevice as sd
-from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtWidgets import (
+from PySide6.QtCore import QTimer, Signal
+from PySide6.QtWidgets import (
     QComboBox,
     QLabel,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QTextEdit,
     QWidget,
 )
@@ -24,10 +25,13 @@ class AudioWidget(QWidget):
     """
 
     # 信号定义
-    settings_changed = pyqtSignal()
-    status_message = pyqtSignal(str)
-    reset_input_ui = pyqtSignal()
-    reset_output_ui = pyqtSignal()
+    settings_changed = Signal()
+    status_message = Signal(str)
+    reset_input_ui = Signal()
+    reset_output_ui = Signal()
+    # 后台扫描结果（跨线程回到 UI 线程）
+    devices_scanned = Signal(list, list)
+    scan_failed = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -45,10 +49,12 @@ class AudioWidget(QWidget):
         self.testing_input = False
         self.testing_output = False
 
+        # 扫描状态
+        self._scan_in_progress = False
+
         # 初始化UI
         self._setup_ui()
         self._connect_events()
-        self._scan_devices()
         self._load_config_values()
 
         # 连接线程安全UI更新信号
@@ -56,25 +62,54 @@ class AudioWidget(QWidget):
             self.status_message.connect(self._on_status_message)
             self.reset_input_ui.connect(self._reset_input_test_ui)
             self.reset_output_ui.connect(self._reset_output_test_ui)
+            self.devices_scanned.connect(self._apply_scanned_devices)
+            self.scan_failed.connect(self._on_scan_failed)
         except Exception:
             pass
+
+        # 设备扫描可能耗时数百毫秒到数秒，放到事件循环启动后异步进行，
+        # 避免打开设置面板时卡住主线程。
+        QTimer.singleShot(0, self._scan_devices_async)
 
     def _setup_ui(self):
         """
         设置UI界面.
         """
         try:
-            from PyQt5 import uic
+            from src.utils.ui_loader import load_ui_into
 
             ui_path = Path(__file__).parent / "audio_widget.ui"
-            uic.loadUi(str(ui_path), self)
+            load_ui_into(ui_path, self)
 
             # 获取UI控件引用
             self._get_ui_controls()
 
+            # 设备信息/日志框固定在页面底部，不随设备配置一起滚动
+            self._dock_status_group()
+
         except Exception as e:
             self.logger.error(f"设置音频UI失败: {e}", exc_info=True)
             raise
+
+    def _dock_status_group(self):
+        """把「设备信息」日志框从滚动区移到底部固定显示."""
+        try:
+            status_group = self.findChild(QWidget, "status_group")
+            scroll_area = self.findChild(QScrollArea, "scrollArea")
+            root_layout = self.layout()
+            if status_group is None or scroll_area is None or root_layout is None:
+                return
+
+            content = scroll_area.widget()
+            if content is not None and content.layout() is not None:
+                content.layout().removeWidget(status_group)
+
+            root_layout.addWidget(status_group)
+            # 滚动区占据剩余空间，日志框保持约 140-180px
+            root_layout.setStretch(0, 1)
+            root_layout.setSpacing(12)
+        except Exception as e:
+            self.logger.warning(f"固定设备信息框失败: {e}")
 
     def _get_ui_controls(self):
         """
@@ -175,28 +210,42 @@ class AudioWidget(QWidget):
 
     def _scan_devices(self):
         """
-        扫描音频设备.
+        扫描音频设备（异步入口，兼容原按钮连接）.
         """
+        self._scan_devices_async()
+
+    def _scan_devices_async(self):
+        """在后台线程枚举音频设备，结果通过信号回到 UI 线程."""
+        if self._scan_in_progress:
+            return
+        self._scan_in_progress = True
+        self._append_status("正在扫描音频设备...")
         try:
-            self._append_status("正在扫描音频设备...")
+            worker = threading.Thread(
+                target=self._scan_devices_worker,
+                name="settings:audio-scan",
+                daemon=True,
+            )
+            worker.start()
+        except Exception as e:
+            self._scan_in_progress = False
+            self.logger.error(f"启动音频设备扫描线程失败: {e}", exc_info=True)
+            self._append_status(f"扫描设备失败: {e}")
 
-            # 清空现有设备列表
-            self.input_devices.clear()
-            self.output_devices.clear()
-
-            # 获取系统默认设备
+    def _scan_devices_worker(self):
+        """后台线程：只做数据采集，不碰任何 Qt 控件."""
+        try:
             default_input = sd.default.device[0] if sd.default.device else None
             default_output = sd.default.device[1] if sd.default.device else None
 
-            # 扫描所有设备
-            devices = sd.query_devices()
-            for i, dev_info in enumerate(devices):
+            inputs = []
+            outputs = []
+            for i, dev_info in enumerate(sd.query_devices()):
                 device_name = dev_info["name"]
 
-                # 添加输入设备
                 if dev_info["max_input_channels"] > 0:
                     default_mark = " (默认)" if i == default_input else ""
-                    self.input_devices.append(
+                    inputs.append(
                         {
                             "id": i,
                             "name": device_name + default_mark,
@@ -206,10 +255,9 @@ class AudioWidget(QWidget):
                         }
                     )
 
-                # 添加输出设备
                 if dev_info["max_output_channels"] > 0:
                     default_mark = " (默认)" if i == default_output else ""
-                    self.output_devices.append(
+                    outputs.append(
                         {
                             "id": i,
                             "name": device_name + default_mark,
@@ -219,19 +267,26 @@ class AudioWidget(QWidget):
                         }
                     )
 
-            # 更新下拉框
-            self._update_device_combos()
-
-            # 自动选择默认设备
-            self._select_default_devices()
-
-            self._append_status(
-                f"扫描完成: 找到 {len(self.input_devices)} 个输入设备, {len(self.output_devices)} 个输出设备"
-            )
-
+            self.devices_scanned.emit(inputs, outputs)
         except Exception as e:
             self.logger.error(f"扫描音频设备失败: {e}", exc_info=True)
-            self._append_status(f"扫描设备失败: {str(e)}")
+            self.scan_failed.emit(str(e))
+
+    def _apply_scanned_devices(self, inputs: list, outputs: list):
+        """UI 线程：应用后台扫描结果."""
+        self.input_devices = inputs
+        self.output_devices = outputs
+        self._scan_in_progress = False
+        self._update_device_combos()
+        self._select_default_devices()
+        self._append_status(
+            f"扫描完成: 找到 {len(self.input_devices)} 个输入设备, "
+            f"{len(self.output_devices)} 个输出设备"
+        )
+
+    def _on_scan_failed(self, error: str):
+        self._scan_in_progress = False
+        self._append_status(f"扫描设备失败: {error}")
 
     def _update_device_combos(self):
         """

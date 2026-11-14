@@ -220,6 +220,8 @@ class McpServer:
 
     def __init__(self):
         self.tools: List[McpTool] = []
+        # 所有尝试注册过的工具（含被禁用而未注册的），供设置页展示
+        self.tool_catalog: Dict[str, str] = {}
         self._send_callback: Optional[Callable] = None
         self._camera = None
 
@@ -237,6 +239,30 @@ class McpServer:
             # 从参数创建McpTool
             name, description, properties, callback = tool
             tool = McpTool(name, description, properties, callback)
+
+        # 先登记到目录（即使随后因配置被禁用），确保设置页可以再次勾选启用
+        self.tool_catalog.setdefault(tool.name, tool.description or "")
+
+        # 文件工具是高风险工具，必须先在设置页显式启用（默认关闭）
+        file_enabled = False
+        try:
+            from src.utils.config_manager import ConfigManager
+
+            config = ConfigManager.get_instance()
+            file_enabled = bool(
+                config.get_config("MCP_FILE_TOOLS.ENABLED", False)
+            )
+            disabled = config.get_config("MCP_TOOLS.DISABLED", []) or []
+        except Exception:
+            disabled = []
+
+        if tool.name.startswith("file.") and not file_enabled:
+            logger.info(f"Skip disabled file tool: {tool.name}")
+            return
+
+        if tool.name in disabled:
+            logger.info(f"Skip disabled tool: {tool.name}")
+            return
 
         # 检查是否已存在
         if any(t.name == tool.name for t in self.tools):
@@ -265,7 +291,7 @@ class McpServer:
             ("music", self._register_music_tools),
             ("camera", self._register_camera_tool),
             ("screenshot", self._register_screenshot_tool),
-            ("bazi", self._register_bazi_tools),
+            ("file_tools", self._register_file_tools),
         )
 
         try:
@@ -379,12 +405,12 @@ class McpServer:
             )
         )
 
-    def _register_bazi_tools(self):
-        """注册八字命理工具."""
-        from src.mcp.bazi import get_bazi_manager
+    def _register_file_tools(self):
+        """注册文件操作工具."""
+        from src.mcp.file_tools import get_file_tools_manager
 
-        bazi_manager = get_bazi_manager()
-        bazi_manager.init_tools(self.add_tool, PropertyList, Property, PropertyType)
+        manager = get_file_tools_manager()
+        manager.init_tools(self.add_tool, PropertyList, Property, PropertyType)
 
     async def parse_message(self, message: Union[str, Dict[str, Any]]):
         """

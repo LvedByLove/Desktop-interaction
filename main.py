@@ -10,6 +10,21 @@ import sys
 # 必须在导入 numpy 之前设置；main.py 下方的 src.application 会间接导入 numpy。
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
+# qasync 按 QT_API 选择绑定；本应用已迁移为 PySide6，直接强制指定，
+# 避免外部环境残留 QT_API=pyqt5 时选错绑定。
+os.environ["QT_API"] = "pyside6"
+
+# Qt6 默认启用高 DPI 自动缩放，会把整套界面在 125% 缩放的屏幕上放大 25%，
+# 与旧 PyQt5 版本（DPR=1.0）的观感不一致。Windows 下关闭自动缩放以保持
+# 原有尺寸和字体基线；macOS/Linux 保留 Qt6 的原生高 DPI 行为。
+if sys.platform == "win32":
+    os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "0")
+
+# QML 里的 Button/TextField 等使用自定义 background/contentItem，
+# 原生 Quick Controls 样式不支持这种定制，会打印 warning 且外观失效。
+# 统一使用可定制的 Basic 样式。
+os.environ["QT_QUICK_CONTROLS_STYLE"] = "Basic"
+
 _single_instance_lock = None
 
 # 单实例运行检测
@@ -186,9 +201,11 @@ if __name__ == "__main__":
     exit_code = 1
     try:
         args = parse_args()
-        setup_logging()
 
+        # 先等旧实例退出：setup_logging 会创建 ConfigManager 并执行
+        # PATHS 目录迁移，必须避免与旧进程同时读写日志/缓存目录。
         wait_for_parent_exit(args.wait_parent_pid)
+        setup_logging()
 
         if args.mode == "gui" and not check_single_instance():
             logger.info("检测到已有实例运行，当前实例退出")
@@ -243,13 +260,21 @@ if __name__ == "__main__":
             # 在GUI模式下，由main统一创建 QApplication 与 qasync 事件循环
             try:
                 import qasync
-                from PyQt5.QtGui import QIcon
-                from PyQt5.QtWidgets import QApplication
+                from PySide6.QtGui import QIcon
+                from PySide6.QtWidgets import QApplication
             except ImportError as e:
-                logger.error(f"GUI模式需要qasync和PyQt5库: {e}")
+                logger.error(f"GUI模式需要qasync和PySide6库: {e}")
                 sys.exit(1)
 
             qt_app = QApplication.instance() or QApplication(sys.argv)
+
+            # 恢复 Qt5 时代的原生 Windows 样式，避免 Qt6 windows11 样式
+            # 与现有 QSS/控件尺寸产生差异。
+            if sys.platform == "win32":
+                try:
+                    qt_app.setStyle("windowsvista")
+                except Exception as e:
+                    logger.debug(f"设置 windowsvista 样式失败: {e}")
 
             # 设置应用级窗口图标（任务栏/窗口标题栏），资源随包打包
             try:

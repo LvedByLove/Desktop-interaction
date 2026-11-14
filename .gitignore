@@ -29,6 +29,7 @@ dist/
 installer/
 nuitka_build/
 *.bat
+nuitka_build_pyqt5_backup/
 
 
 # 日志文件
