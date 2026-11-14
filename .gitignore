@@ -35,3 +35,6 @@ nuitka_build_pyqt5_backup/
 # 日志文件
 *.log
 .cache/
+
+#唤醒词
+models/
