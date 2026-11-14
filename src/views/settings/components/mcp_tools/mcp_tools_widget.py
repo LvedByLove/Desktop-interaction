@@ -81,6 +81,7 @@ _TOOL_META = {
     "music_player.resume": ("恢复音乐", "从暂停位置继续播放。"),
     "music_player.stop": ("停止音乐", "停止播放并回到歌曲开头。"),
     "music_player.seek": ("跳转播放进度", "跳到指定时间或播放百分比。"),
+    "music_player.set_volume": ("设置音乐音量", "调节本程序播放音乐的音量（0–100）。"),
     "music_player.get_lyrics": ("获取歌词", "获取当前歌曲的歌词。"),
     # 拍照 / 截图
     "take_photo": ("拍照识图", "拍照并分析画面内容，回答相关问题。"),

@@ -102,6 +102,8 @@ class ConfigManager:
         "MUSIC": {
             # 为空时使用默认音乐目录（用户音乐目录下的 music 子目录）
             "MUSIC_DIR": None,
+            # 音乐播放音量（0-100），只影响本程序播放的音乐
+            "VOLUME": 50,
             # 在线音乐 API（留空使用内置默认值）
             "SEARCH_URL": None,
             "URL_API": None,

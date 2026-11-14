@@ -13,10 +13,16 @@ Windows 原生 OLE 拖放（DoDragDrop）会向注册的 drop target 发送 Drag
   - pynput 检测到"疑似拖拽开始"→ 显示窗口；拖拽期间鼠标被拖放源捕获，
     窗口挡不到任何点击，误显示零代价。
   - DragEnter 时 QueryGetData(CF_HDROP)：
-      * 命中 → 发射 fileDragEntered（队列投递到主线程）并立即隐藏自身，
-        避免 TOPMOST 挡住随后展开的 QML DropArea/中转站窗口；
-      * 未命中 → 返回 DROPEFFECT_NONE，不影响拖放源。
+      * 命中 → 发射 fileDragEntered 唤醒中转站界面，并保持窗口可见，
+        由 Drop 回调原生解析 CF_HDROP 取出路径（不依赖 Qt 窗口接收拖放）；
+      * 未命中 → 隐藏自身并返回 DROPEFFECT_NONE，把非文件拖拽放行给下面的窗口。
   - 松开左键（pynput）→ 隐藏窗口。
+
+为什么 Drop 要原生处理：
+  拖放最终落在"光标下最上层的窗口"上。若依赖 QML DropArea，则会受 Qt 窗口
+  置顶顺序、模态对话框（Qt 会禁用应用内其它窗口，拖放直接返回 NONE）等影响。
+  本窗口是独立线程里用原生 API 创建的 TOPMOST 窗口，不在 Qt 的窗口管理里，
+  因此始终能收到拖放，是最稳定的一层兜底。
 
 注意：窗口不能带 WS_EX_TRANSPARENT —— 穿透窗口会被 OLE 命中测试整体跳过（PoC 实测），
 因此采用"仅拖拽期间显示"的方式规避挡点击问题。
@@ -93,6 +99,19 @@ class FORMATETC(ctypes.Structure):
     ]
 
 
+class STGMEDIUM(ctypes.Structure):
+    """IDataObject::GetData 的返回介质；CF_HDROP 使用 TYMED_HGLOBAL。
+
+    DWORD 后紧跟指针，ctypes 会自动补齐 64 位对齐所需的填充。
+    """
+
+    _fields_ = [
+        ("tymed", wintypes.DWORD),
+        ("hGlobal", ctypes.c_void_p),
+        ("pUnkForRelease", ctypes.c_void_p),
+    ]
+
+
 class WNDCLASSW(ctypes.Structure):
     _fields_ = [
         ("style", wintypes.UINT),
@@ -141,6 +160,12 @@ DROP_FN = ctypes.WINFUNCTYPE(
     ctypes.POINTER(wintypes.DWORD),
 )
 QUERYGETDATA_FN = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.POINTER(FORMATETC))
+GETDATA_FN = ctypes.WINFUNCTYPE(
+    ctypes.c_long,
+    ctypes.c_void_p,
+    ctypes.POINTER(FORMATETC),
+    ctypes.POINTER(STGMEDIUM),
+)
 WNDPROC_FN = ctypes.WINFUNCTYPE(
     ctypes.c_ssize_t, ctypes.c_void_p, wintypes.UINT, ctypes.c_void_p, ctypes.c_void_p
 )
@@ -154,6 +179,13 @@ WNDPROC_FN = ctypes.WINFUNCTYPE(
 _user32 = ctypes.WinDLL("user32")
 _kernel32 = ctypes.WinDLL("kernel32")
 _ole32 = ctypes.WinDLL("ole32")
+
+# CF_HDROP 解析要在任意调用时机都安全：默认 restype 为 c_int 会把 64 位
+# HGLOBAL/内存指针截断，必须在模块加载时就声明。只作用于上面的私有实例。
+_kernel32.GlobalLock.restype = ctypes.c_void_p
+_kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+_kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+_ole32.ReleaseStgMedium.argtypes = [ctypes.POINTER(STGMEDIUM)]
 
 
 # ---------- Win32 函数签名（避免 64 位句柄截断） ----------
@@ -233,6 +265,77 @@ def _pdataobj_has_format(pdataobj, cf, tymed):
     return qgd(pdataobj, ctypes.byref(fmt)) == S_OK
 
 
+def _read_string_list(addr, wide):
+    """读取 DROPFILES 之后以双 NUL 结尾的路径串列表。"""
+    paths = []
+    offset = 0
+    limit = 1 << 20  # 防御性上限：1MB
+    while offset < limit:
+        if wide:
+            s = ctypes.wstring_at(addr + offset)
+            if not s:
+                break
+            paths.append(s)
+            offset += (len(s) + 1) * 2
+        else:
+            raw = ctypes.string_at(addr + offset)
+            if not raw:
+                break
+            paths.append(raw.decode("mbcs", "replace"))
+            offset += len(raw) + 1
+    return paths
+
+
+def _parse_dropfiles(hglobal):
+    """解析 HGLOBAL 中的 DROPFILES 结构，返回文件/文件夹路径列表。
+
+    DROPFILES: pFiles(DWORD,偏移) + pt(POINT) + fNC(BOOL) + fWide(BOOL)，
+    fWide 位于偏移 16；路径串从 pFiles 偏移处开始。
+    """
+    handle = ctypes.c_void_p(hglobal)
+    ptr = _kernel32.GlobalLock(handle)
+    if not ptr:
+        return []
+    try:
+        p_files = ctypes.c_uint32.from_address(ptr).value
+        f_wide = ctypes.c_int.from_address(ptr + 16).value
+        return _read_string_list(ptr + p_files, bool(f_wide))
+    except Exception as e:
+        logger.warning(f"解析 CF_HDROP 数据失败: {e}")
+        return []
+    finally:
+        _kernel32.GlobalUnlock(handle)
+
+
+def _get_hdrop_paths(pdataobj):
+    """通过 IDataObject::GetData（vtbl 索引 3）取出 CF_HDROP 路径列表。"""
+    if not pdataobj:
+        return []
+    try:
+        vtbl = ctypes.cast(pdataobj, ctypes.POINTER(ctypes.c_void_p))[0]
+        get_data = GETDATA_FN(ctypes.cast(vtbl, ctypes.POINTER(ctypes.c_void_p))[3])
+        fmt = FORMATETC()
+        fmt.cfFormat = CF_HDROP
+        fmt.ptd = None
+        fmt.dwAspect = DVASPECT_CONTENT
+        fmt.lindex = -1
+        fmt.tymed = TYMED_HGLOBAL
+        medium = STGMEDIUM()
+        hr = get_data(pdataobj, ctypes.byref(fmt), ctypes.byref(medium))
+        if hr != S_OK or not medium.hGlobal:
+            return []
+        try:
+            return _parse_dropfiles(medium.hGlobal)
+        finally:
+            try:
+                _ole32.ReleaseStgMedium(ctypes.byref(medium))
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(f"读取拖放文件列表失败: {e}")
+        return []
+
+
 @DRAGENTER_FN
 def _drag_enter(this, pdataobj, grf_key_state, pt, pdw_effect):
     catcher = _ACTIVE_CATCHER
@@ -242,33 +345,63 @@ def _drag_enter(this, pdataobj, grf_key_state, pt, pdw_effect):
     )
     if is_file and catcher is not None:
         logger.info(f"OLE 检测到文件拖拽进入目标区 位置=({pt.x},{pt.y})")
-        # 立即隐藏：避免 TOPMOST 窗口挡住随后展开的 QML DropArea/中转站。
-        # 本轮拖拽由 pynput 结束信号负责再次隐藏（幂等）。
-        _user32.ShowWindow(catcher._hwnd, SW_HIDE)
+        # 不隐藏：保持窗口在最上层，由本窗口的 Drop 原生接收文件。
+        # 这样即使中转站窗口被模态对话框禁用、或被其它置顶窗口压住，
+        # 拖放也仍然落在本窗口上，不会被 Qt 拒绝。
+        catcher._drop_enabled = True
         # 跨线程发射：Qt 自动队列投递到主线程槽
         catcher.fileDragEntered.emit()
         pdw_effect[0] = DROPEFFECT_COPY
         return S_OK
-    # 非文件拖拽：明确拒绝，不影响拖放源
+    # 非文件拖拽：隐藏自身，把拖拽放行给下面的窗口
+    if catcher is not None:
+        catcher._drop_enabled = False
+        _user32.ShowWindow(catcher._hwnd, SW_HIDE)
     pdw_effect[0] = DROPEFFECT_NONE
     return S_FALSE
 
 
 @DRAGOVER_FN
 def _drag_over(this, grf_key_state, pt, pdw_effect):
-    pdw_effect[0] = DROPEFFECT_COPY
+    catcher = _ACTIVE_CATCHER
+    if catcher is not None and catcher._drop_enabled and not catcher._suppress_drops:
+        pdw_effect[0] = DROPEFFECT_COPY
+    else:
+        pdw_effect[0] = DROPEFFECT_NONE
     return S_OK
 
 
 @DRAGLEAVE_FN
 def _drag_leave(this):
+    catcher = _ACTIVE_CATCHER
+    if catcher is not None:
+        catcher._drop_enabled = False
     return S_OK
 
 
 @DROP_FN
 def _drop(this, pdataobj, grf_key_state, pt, pdw_effect):
-    # 正常流程中命中后窗口已隐藏，Drop 不会到达这里；防御性处理。
-    pdw_effect[0] = DROPEFFECT_NONE
+    logger.info("OLE Drop 回调触发")
+    catcher = _ACTIVE_CATCHER
+    if catcher is None or catcher._suppress_drops:
+        # 拖出中转站时自己发起的拖拽（或异常状态）：不接管，避免文件被加回
+        logger.debug(f"OLE Drop 被抑制 (catcher={catcher is not None}, suppress={getattr(catcher, '_suppress_drops', None)})")
+        pdw_effect[0] = DROPEFFECT_NONE
+        return S_OK
+
+    catcher._drop_enabled = False
+    paths = _get_hdrop_paths(pdataobj)
+    if not paths:
+        logger.info("OLE Drop 未解析到文件路径，忽略本次拖放")
+        pdw_effect[0] = DROPEFFECT_NONE
+        return S_OK
+
+    logger.info(f"OLE 原生接收 {len(paths)} 个文件/文件夹")
+    # 跨线程发射：主线程加入中转站模型并展开面板
+    catcher.filesDropped.emit(paths)
+    # 本次拖拽已结束，立即隐藏，避免继续遮挡下面的窗口
+    _user32.ShowWindow(catcher._hwnd, SW_HIDE)
+    pdw_effect[0] = DROPEFFECT_COPY
     return S_OK
 
 
@@ -306,12 +439,18 @@ class OleDropCatcher(QObject):
 
     # 文件拖拽进入目标区（在后台线程发射，Qt 队列投递到主线程）
     fileDragEntered = Signal()
+    # 原生 Drop 收到文件路径列表（在后台线程发射，Qt 队列投递到主线程）
+    filesDropped = Signal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._thread = None
         self._ready = threading.Event()
         self._hwnd = 0
+        # 当前拖拽是否携带文件（DragEnter 判定，DragOver/Drop 依据它决定是否接管）
+        self._drop_enabled = False
+        # 拖出中转站时自己发起的拖拽：忽略落在捕捉带上的 Drop
+        self._suppress_drops = False
         # 保持 ctypes 回调与 COM 对象的引用，防止被 GC 回收导致崩溃
         self._keepalive = []
 
@@ -348,6 +487,19 @@ class OleDropCatcher(QObject):
             _user32.PostMessageW(self._hwnd, WM_APP_HIDE, 0, 0)
         except Exception as e:
             logger.debug(f"隐藏 OLE 捕捉窗口失败: {e}")
+
+    def raise_above(self):
+        """把捕捉窗口重新提到置顶层。
+
+        中转站窗口 show()/raise_() 后会压到捕捉窗口上面；此时若指针正落在
+        薄条/面板区域，拖放会重新交给 Qt 窗口处理（模态时会被拒绝）。
+        唤醒中转站后再调用一次，确保整条捕捉带始终由原生窗口接管。
+        """
+        self.show()
+
+    def set_suppress_drops(self, suppress: bool):
+        """拖出中转站期间抑制原生 Drop，避免文件落到顶部带里被又加回中转站。"""
+        self._suppress_drops = bool(suppress)
 
     def stop(self):
         """退出后台线程（daemon 线程，join 超时后随进程结束，不会阻塞关闭）。"""

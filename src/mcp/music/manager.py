@@ -52,6 +52,11 @@ class MusicToolsManager:
             # 注册跳转工具
             self._register_seek_tool(add_tool, PropertyList, Property, PropertyType)
 
+            # 注册音乐音量工具
+            self._register_set_volume_tool(
+                add_tool, PropertyList, Property, PropertyType
+            )
+
             # 注册获取歌词工具
             self._register_get_lyrics_tool(add_tool, PropertyList)
 
@@ -196,6 +201,34 @@ class MusicToolsManager:
             )
         )
         logger.debug("[MusicManager] 注册跳转工具成功")
+
+    def _register_set_volume_tool(
+        self, add_tool, PropertyList, Property, PropertyType
+    ):
+        """
+        注册音乐播放音量工具.
+        """
+
+        async def set_volume_wrapper(args: Dict[str, Any]) -> str:
+            volume = (args or {}).get("volume", 50)
+            result = await self._music_player.set_volume(int(volume))
+            return result.get("message", "设置音乐音量完成")
+
+        volume_props = PropertyList(
+            [Property("volume", PropertyType.INTEGER, min_value=0, max_value=100)]
+        )
+
+        add_tool(
+            (
+                "music_player.set_volume",
+                "设置本程序播放音乐的音量（0-100），只影响音乐，不影响系统音量。"
+                "用于用户说'音乐声音小一点'、'音乐太响了'、'音乐音量调到30'等场景。"
+                "注意：这不是系统音量；用户要求调整电脑/系统音量时请使用 self.audio_speaker.set_volume。",
+                volume_props,
+                set_volume_wrapper,
+            )
+        )
+        logger.debug("[MusicManager] 注册音乐音量工具成功")
 
     def _register_get_lyrics_tool(self, add_tool, PropertyList):
         """

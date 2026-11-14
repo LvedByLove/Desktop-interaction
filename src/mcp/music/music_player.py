@@ -5,6 +5,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
+
 from src.audio_codecs.audio_channels import OUTPUT_CHANNEL_MUSIC
 from src.audio_codecs.music_decoder import MusicDecodeComplete, MusicDecodeError, MusicDecoder
 from src.utils.logging_config import get_logger
@@ -38,6 +40,9 @@ class MusicPlayer:
     _MUSIC_INDEX_TTL = 3.0
     # 随机连续播放时，连续失败多少首后自动退出随机模式
     _MAX_SHUFFLE_FAILURES = 3
+    # 默认音乐播放音量（0-100）。音乐文件通常按满刻度响度制作，
+    # 在耳机上即使是较低的系统音量也会偏响，因此默认只输出一半增益。
+    DEFAULT_VOLUME = 50
 
     def __init__(self):
         self._music_queue: Optional[asyncio.Queue] = None
@@ -52,6 +57,9 @@ class MusicPlayer:
         self.music_dir = self._resolve_music_dir()
         self._music_index_cache: Optional[dict] = None
         self._music_index_scanned_at = 0.0
+
+        # 音乐播放增益（0-100），只作用于本程序播放的歌曲，不影响音效/系统音量
+        self._volume_percent = self._load_volume_percent()
 
         self.current_song = ""
         self.total_duration = 0
@@ -79,6 +87,59 @@ class MusicPlayer:
         self._initialize_app_reference()
 
         logger.info("音乐播放器已启用本地播放模式")
+
+    def _load_volume_percent(self) -> int:
+        """从配置读取音乐播放音量（0-100），非法值回退到默认值."""
+        try:
+            from src.utils.config_manager import ConfigManager
+
+            value = ConfigManager.get_instance().get_config(
+                "MUSIC.VOLUME", self.DEFAULT_VOLUME
+            )
+            return max(0, min(100, int(value)))
+        except (TypeError, ValueError):
+            return self.DEFAULT_VOLUME
+        except Exception:
+            return self.DEFAULT_VOLUME
+
+    def set_volume_gain(self, volume: int) -> int:
+        """实时设置音乐播放增益（0-100，不写入配置）.
+
+        仅影响后续播放的音乐帧；系统音量与按住说话音效不受影响。
+        """
+        try:
+            value = int(volume)
+        except (TypeError, ValueError):
+            value = self.DEFAULT_VOLUME
+        self._volume_percent = max(0, min(100, value))
+        return self._volume_percent
+
+    def get_volume_gain(self) -> int:
+        """返回当前音乐播放增益（0-100）."""
+        return self._volume_percent
+
+    def _apply_music_volume(self, pcm_data: np.ndarray) -> np.ndarray:
+        """按播放增益缩放 PCM 数据（int16），避免音乐在耳机上过响."""
+        gain = self._volume_percent / 100.0
+        if gain >= 1.0 or pcm_data.size == 0:
+            return pcm_data
+        if gain <= 0.0:
+            return np.zeros_like(pcm_data)
+
+        scaled = pcm_data.astype(np.float32) * gain
+        np.clip(scaled, -32768.0, 32767.0, out=scaled)
+        return scaled.astype(np.int16)
+
+    async def set_volume(self, volume: int) -> dict:
+        """设置并持久化音乐播放音量（供 MCP 工具调用）."""
+        value = self.set_volume_gain(volume)
+        try:
+            from src.utils.config_manager import ConfigManager
+
+            ConfigManager.get_instance().update_config("MUSIC.VOLUME", value)
+        except Exception as e:
+            logger.warning(f"保存音乐音量配置失败: {e}")
+        return {"status": "success", "message": f"音乐播放音量已设置为 {value}%"}
 
     def _initialize_app_reference(self):
         """
@@ -358,7 +419,14 @@ class MusicPlayer:
             }
 
         # 下载完成后再停掉当前歌曲，避免搜索/下载期间打断正在播放的音乐
-        await fetch_lyrics_and_save(hit.song_id, path, config)
+        await fetch_lyrics_and_save(
+            hit.song_id,
+            path,
+            config,
+            title=hit.title,
+            artist=hit.artist,
+            duration=hit.duration,
+        )
         await self._disable_shuffle()
         await self._stop_impl(clear_queue=True)
 
@@ -587,6 +655,9 @@ class MusicPlayer:
         await self._stop_playback(reset_state=False)
         await codec.clear_audio_queue(channel=OUTPUT_CHANNEL_MUSIC)
 
+        # 每次起播时同步最新配置，设置页保存后无需重启程序
+        self._volume_percent = self._load_volume_percent()
+
         self._music_queue = asyncio.Queue(maxsize=300)
         self._decoder = MusicDecoder()
         self._current_file_path = path
@@ -705,6 +776,7 @@ class MusicPlayer:
                 codec = self._ensure_audio_codec()
                 if not codec:
                     break
+                pcm_data = self._apply_music_volume(pcm_data)
                 await codec.write_pcm_direct(pcm_data, channel=OUTPUT_CHANNEL_MUSIC)
         except asyncio.CancelledError:
             pass
@@ -922,6 +994,7 @@ class MusicPlayer:
                 f"播放时长: {duration_str}\n"
                 f"当前位置: {position_str}\n"
                 f"播放进度: {progress}%\n"
+                f"音乐音量: {self._volume_percent}%\n"
                 f"歌词可用: {'是' if len(self.lyrics) > 0 else '否'}"
             ),
         }

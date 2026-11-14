@@ -117,8 +117,12 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         self._file_tray.set_icon_provider(self._file_icon_provider)
         # 全局拖拽检测（主动唤醒圆球），延迟到 GUI 启动后再实例化
         self._drag_watcher = None
-        # OLE 文件拖拽捕捉器（CF_HDROP 精确判定），延迟到 GUI 启动后再实例化
+        # OLE 文件拖拽捕捉器（CF_HDROP 精确判定 + 原生 Drop），延迟到 GUI 启动后再实例化
         self._ole_catcher = None
+        # 正在从托盘向外拖动文件（此时不应把顶部拖拽捕捉带唤醒/接管）
+        self._internal_drag = False
+        # 是否有正在进行中的鼠标拖拽（用于延后隐藏捕捉窗口，给 Drop 留时间）
+        self._drag_active = False
         # 文件中转站独立窗口（与主胶囊窗口解耦，可同时显示互不干扰）
         self.tray_root = None
         self.tray_qml = None
@@ -1233,7 +1237,18 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         try:
             from src.views.settings import SettingsWindow
 
-            settings_window = SettingsWindow()
+            settings_window = SettingsWindow(self.root)
+            # 窗口级模态：只阻塞主胶囊窗口，不禁用中转站这类独立顶层窗口。
+            # exec() 默认是应用级模态，会把中转站窗口一并禁用并拦截其鼠标事件，
+            # 导致设置页打开时文件无法拖入、也无法从中转站拖出。
+            settings_window.setWindowModality(Qt.WindowModal)
+            # 有父窗口时 Qt 会以父窗口（顶部小胶囊）为基准居中，会跑到屏幕外，
+            # 这里显式居中到主屏。
+            screen_rect = primary_available_geometry()
+            settings_window.move(
+                screen_rect.left() + (screen_rect.width() - settings_window.width()) // 2,
+                screen_rect.top() + (screen_rect.height() - settings_window.height()) // 2,
+            )
             settings_window.exec()
         except Exception as e:
             self.logger.error(f"打开设置窗口失败: {e}", exc_info=True)
@@ -1406,6 +1421,8 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
 
             self._ole_catcher = OleDropCatcher(self)
             self._ole_catcher.fileDragEntered.connect(self._on_file_drag_entered)
+            # 原生 Drop：不经过 Qt 窗口，模态/置顶遮挡都不影响文件拖入
+            self._ole_catcher.filesDropped.connect(self._on_native_files_dropped)
             self._ole_catcher.start()
             self.logger.info("OLE 文件拖拽捕捉器已启动")
         except Exception as e:
@@ -1431,6 +1448,10 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
 
         是否唤醒圆球由捕捉窗口的 CF_HDROP 判定决定（见 _on_file_drag_entered）。
         """
+        self._drag_active = True
+        if self._internal_drag:
+            # 从托盘往外拖文件：不要唤醒捕捉带，否则会把文件又接回中转站
+            return
         self.logger.info("疑似拖拽开始：显示 OLE 捕捉窗口")
         if self._ole_catcher:
             try:
@@ -1440,12 +1461,14 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
 
     def _on_global_drag_ended(self):
         """拖拽结束（松开左键）：隐藏捕捉窗口，唤醒薄条回落待命态。"""
+        self._drag_active = False
         self.logger.info("拖拽结束：隐藏 OLE 捕捉窗口")
         if self._ole_catcher:
-            try:
-                self._ole_catcher.hide()
-            except Exception as e:
-                self.logger.debug(f"隐藏捕捉窗口失败: {e}")
+            # 必须延后隐藏：松开左键时系统才把 Drop 投递给捕捉窗口，
+            # pynput 的松手信号往往先到几毫秒。若立即隐藏，窗口已不在
+            # 命中测试里，Drop 会落到下面（被模态禁用的）窗口上而丢失。
+            catcher = self._ole_catcher
+            QTimer.singleShot(250, lambda: self._hide_catcher_if_idle(catcher))
         root_object = self.tray_qml.rootObject() if self.tray_qml else None
         if root_object and hasattr(root_object, "unwakeBall"):
             try:
@@ -1453,6 +1476,15 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
             except Exception as e:
                 self.logger.debug(f"唤醒薄条回落失败: {e}")
         self._hide_tray_window_if_idle()
+
+    def _hide_catcher_if_idle(self, catcher):
+        """延迟隐藏捕捉窗口：期间若已开始新的拖拽则保持显示。"""
+        if self._drag_active or catcher is not self._ole_catcher:
+            return
+        try:
+            catcher.hide()
+        except Exception as e:
+            self.logger.debug(f"隐藏捕捉窗口失败: {e}")
 
     def _on_file_drag_entered(self):
         """OLE 确认文件/文件夹拖拽经过顶部目标区：唤醒薄条作为可拖放目标。"""
@@ -1462,16 +1494,22 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
             try:
                 # 先按唤醒薄条尺寸调整窗口，再显示，避免闪现默认尺寸
                 root_object.wakeBall()
-                if not bool(root_object.property("wakeVisible")):
-                    # 中转站面板已打开（从托盘里往外拖文件等），无需再唤醒
-                    return
-                if self._can_morph_from_standby_line():
-                    # 主胶囊是待机短横线：让它“长成”唤醒薄条
-                    self._show_tray_window_from_line(root_object)
-                else:
-                    self._show_tray_window()
+                # 中转站面板已打开时 wakeBall 会直接返回（trayVisible），无需再唤醒
+                if bool(root_object.property("wakeVisible")):
+                    if self._can_morph_from_standby_line():
+                        # 主胶囊是待机短横线：让它“长成”唤醒薄条
+                        self._show_tray_window_from_line(root_object)
+                    else:
+                        self._show_tray_window()
             except Exception as e:
                 self.logger.debug(f"唤醒中转站失败: {e}")
+        # 中转站窗口 show()/raise_() 后可能压到捕捉窗口上面；重新置顶，
+        # 保证落在薄条/面板区域的拖放仍由原生窗口接收（否则模态时会被拒绝）
+        if self._ole_catcher:
+            try:
+                self._ole_catcher.raise_above()
+            except Exception as e:
+                self.logger.debug(f"重新置顶 OLE 捕捉窗口失败: {e}")
 
     def _on_files_dropped(self, urls):
         """
@@ -1494,13 +1532,42 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
                 if url.isLocalFile():
                     local_paths.append(url.toLocalFile())
             if local_paths:
-                added = self._file_tray.add_paths(local_paths)
-                # 提前生成图标并落盘缓存，避免 QML 渲染线程在 data() 里同步查询 shell 图标导致卡顿
-                for p in added:
-                    self._file_icon_provider.icon_url_for_path(p)
+                added = self._add_paths_to_tray(local_paths)
                 self.logger.info(f"文件中转站新增 {len(added)} 项，共 {len(self._file_tray.paths)} 项")
         except Exception as e:
             self.logger.error(f"处理文件拖入失败: {e}", exc_info=True)
+
+    def _add_paths_to_tray(self, local_paths):
+        """把本地路径加入中转站模型并预热图标缓存，返回实际新增的路径。"""
+        added = self._file_tray.add_paths(local_paths)
+        # 提前生成图标并落盘缓存，避免 QML 渲染线程在 data() 里同步查询 shell 图标导致卡顿
+        for p in added:
+            self._file_icon_provider.icon_url_for_path(p)
+        return added
+
+    def _on_native_files_dropped(self, paths):
+        """处理 OLE 捕捉器原生接收的文件 Drop（不经过 Qt 窗口）。
+
+        相比 QML DropArea，这条链路不受 Qt 窗口置顶顺序、模态对话框禁用
+        窗口等因素影响，是拖放的最后一道保障。
+        """
+        try:
+            local_paths = [str(p) for p in (paths or []) if p]
+            if not local_paths:
+                return
+            added = self._add_paths_to_tray(local_paths)
+            self.logger.info(
+                f"OLE 原生拖放新增 {len(added)} 项，共 {len(self._file_tray.paths)} 项"
+            )
+            root_object = self.tray_qml.rootObject() if self.tray_qml else None
+            if root_object and hasattr(root_object, "openFileTray"):
+                try:
+                    root_object.openFileTray()
+                except Exception as e:
+                    self.logger.debug(f"展开中转站失败: {e}")
+                self._show_tray_window()
+        except Exception as e:
+            self.logger.error(f"处理 OLE 原生拖放失败: {e}", exc_info=True)
 
     def _on_file_drag_requested(self, index: int, is_copy: bool):
         """
@@ -1552,7 +1619,23 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
                 drag.setPixmap(pixmap)
 
             # 支持复制 + 移动，默认复制；拖放中按修饰键可动态切换
-            drag.exec(Qt.CopyAction | Qt.MoveAction, Qt.CopyAction)
+            # 拖出期间抑制顶部的原生 Drop，避免把文件拖到屏幕顶部又被加回中转站
+            self._internal_drag = True
+            if self._ole_catcher:
+                try:
+                    self._ole_catcher.set_suppress_drops(True)
+                    self._ole_catcher.hide()
+                except Exception as e:
+                    self.logger.debug(f"暂停 OLE 捕捉窗口失败: {e}")
+            try:
+                drag.exec(Qt.CopyAction | Qt.MoveAction, Qt.CopyAction)
+            finally:
+                self._internal_drag = False
+                if self._ole_catcher:
+                    try:
+                        self._ole_catcher.set_suppress_drops(False)
+                    except Exception:
+                        pass
             # 拖出结束后按磁盘实际存在性清理：条目被"移动/剪切"到别处或拖入
             # 回收站后，源路径已不存在，此时从中转站移除其引用。复制到别处时
             # 源文件仍在，不会被误删。降序遍历避免删除时索引偏移。

@@ -406,7 +406,7 @@ Rectangle {
                     property real startX: 0
                     property real startY: 0
 
-                    onPressed: {
+                    onPressed: function (mouse) {
                         if (mouse.button === Qt.LeftButton) {
                             pressed = true
                             marqueeing = false
@@ -415,7 +415,7 @@ Rectangle {
                         }
                     }
 
-                    onPositionChanged: {
+                    onPositionChanged: function (mouse) {
                         if (!pressed) return
                         if (!marqueeing && Math.abs(mouse.x - startX) + Math.abs(mouse.y - startY) < 4) return
                         marqueeing = true
@@ -542,21 +542,21 @@ Rectangle {
                             ToolTip.text: root.fileBasename(model.path)
                             ToolTip.delay: 300
 
-                            onPressed: {
+                            onPressed: function (mouse) {
                                 pressButton = mouse.button
                                 pressX = mouse.x
                                 pressY = mouse.y
                                 dragStarted = false
                             }
 
-                            onPositionChanged: {
+                            onPositionChanged: function (mouse) {
                                 if (dragStarted || pressButton !== Qt.LeftButton) return
                                 if (Math.abs(mouse.x - pressX) + Math.abs(mouse.y - pressY) < 8) return
                                 dragStarted = true
                                 root.fileDragRequested(index, true)
                             }
 
-                            onReleased: {
+                            onReleased: function (mouse) {
                                 var wasDrag = dragStarted
                                 var btn = pressButton
                                 var mods = mouse.modifiers
@@ -596,7 +596,7 @@ Rectangle {
         anchors.fill: parent
         keys: ["text/uri-list"]
 
-        onEntered: {
+        onEntered: function (drag) {
             if (!drag.hasUrls) return
             root.wakeReady = false
             if (!trayVisible) root.openFileTray()
@@ -608,7 +608,7 @@ Rectangle {
             }
         }
 
-        onDropped: {
+        onDropped: function (drop) {
             if (!drop.hasUrls) return
             drop.accept(Qt.CopyAction)
             var urls = []

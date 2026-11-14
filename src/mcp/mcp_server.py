@@ -422,8 +422,10 @@ class McpServer:
             else:
                 data = message
 
-            logger.info(
-                f"[MCP] 解析消息: {json.dumps(data, ensure_ascii=False, indent=2)}"
+            # 完整报文可能很大（如 initialize 的 capabilities、工具参数），
+            # 只在调试级别输出，常规日志仅记录方法名与 id。
+            logger.debug(
+                f"[MCP] 收到消息: method={data.get('method')}, id={data.get('id')}"
             )
 
             # 检查JSONRPC版本
@@ -448,7 +450,9 @@ class McpServer:
                 logger.error(f"Invalid id for method: {method}")
                 return
 
-            logger.info(f"[MCP] 处理方法: {method}, ID: {id}, 参数: {params}")
+            logger.info(f"[MCP] 处理请求: method={method}, id={id}")
+            # 参数内容可能很大，用 %s 惰性格式化，仅在调试级别才真正拼接
+            logger.debug("[MCP] 请求参数: %s", params)
 
             # 处理不同的方法
             if method == "initialize":
@@ -504,7 +508,8 @@ class McpServer:
         """
         处理工具调用请求.
         """
-        logger.info(f"[MCP] 收到工具调用请求! ID={id}, 参数={params}")
+        logger.info(f"[MCP] 收到工具调用请求: id={id}")
+        logger.debug("[MCP] 工具调用参数: %s", params)
 
         tool_name = params.get("name")
         if not tool_name:
@@ -527,7 +532,8 @@ class McpServer:
         # 获取参数
         arguments = params.get("arguments", {})
 
-        logger.info(f"[MCP] 开始执行工具 {tool_name}, 参数: {arguments}")
+        logger.info(f"[MCP] 开始执行工具: {tool_name}")
+        logger.debug("[MCP] 工具参数: %s", arguments)
 
         # 异步调用工具
         try:

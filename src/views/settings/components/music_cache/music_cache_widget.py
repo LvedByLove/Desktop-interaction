@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QScrollArea,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -49,6 +50,8 @@ class MusicCacheWidget(QWidget):
         self.music_api_edit = None
         self.music_api_key_edit = None
         self.music_quality_combo = None
+        self.music_volume_slider = None
+        self.music_volume_value_label = None
 
         self._setup_ui()
         self._connect_events()
@@ -97,6 +100,26 @@ class MusicCacheWidget(QWidget):
         path_row.addWidget(default_btn)
         music_layout.addRow(QLabel("目录路径"), path_row)
 
+        self.music_volume_slider = QSlider(Qt.Horizontal)
+        self.music_volume_slider.setRange(0, 100)
+        self.music_volume_slider.setSingleStep(5)
+        self.music_volume_slider.setPageStep(10)
+        self.music_volume_slider.setToolTip(
+            "只调节本程序播放音乐的音量，不影响系统音量。\n"
+            "耳机上音乐偏响时可适当调低（默认 50）。"
+        )
+        self.music_volume_value_label = QLabel("50%")
+        self.music_volume_value_label.setMinimumWidth(40)
+        self.music_volume_value_label.setAlignment(
+            Qt.AlignRight | Qt.AlignVCenter
+        )
+
+        volume_row = QHBoxLayout()
+        volume_row.setSpacing(8)
+        volume_row.addWidget(self.music_volume_slider, 1)
+        volume_row.addWidget(self.music_volume_value_label)
+        music_layout.addRow(QLabel("播放音量"), volume_row)
+
         layout.addWidget(music_group)
 
         # 在线音乐 API
@@ -144,6 +167,7 @@ class MusicCacheWidget(QWidget):
         ):
             edit.textChanged.connect(self._emit_settings_changed)
         self.music_quality_combo.currentTextChanged.connect(self._emit_settings_changed)
+        self.music_volume_slider.valueChanged.connect(self._on_music_volume_changed)
 
         browse_btn = self.findChild(QPushButton, "music_dir_browse_btn")
         if browse_btn:
@@ -177,11 +201,34 @@ class MusicCacheWidget(QWidget):
             index = self.music_quality_combo.findText(quality)
             self.music_quality_combo.setCurrentIndex(index if index >= 0 else 0)
 
+            try:
+                volume = max(0, min(100, int(music_cfg.get("VOLUME", 50))))
+            except (TypeError, ValueError):
+                volume = 50
+
+            self.music_volume_slider.blockSignals(True)
+            try:
+                self.music_volume_slider.setValue(volume)
+            finally:
+                self.music_volume_slider.blockSignals(False)
+            self.music_volume_value_label.setText(f"{volume}%")
+
         except Exception as e:
             self.logger.error(f"加载音乐配置失败: {e}", exc_info=True)
 
     def _on_music_dir_changed(self, _text: str):
         """音乐目录文字变化时更新样式并通知配置变更."""
+        self.settings_changed.emit()
+
+    def _on_music_volume_changed(self, value: int):
+        """拖动音量滑块时更新数值并即时应用到正在播放的音乐."""
+        self.music_volume_value_label.setText(f"{value}%")
+        try:
+            from src.mcp.music.music_player import get_music_player_instance
+
+            get_music_player_instance().set_volume_gain(value)
+        except Exception as e:
+            self.logger.debug(f"实时应用音乐音量失败: {e}")
         self.settings_changed.emit()
 
     def _normalize_dir(self, value) -> str:
@@ -233,6 +280,7 @@ class MusicCacheWidget(QWidget):
             existing["DEFAULT_QUALITY"] = (
                 self.music_quality_combo.currentText() or "320k"
             )
+            existing["VOLUME"] = int(self.music_volume_slider.value())
             config_data["MUSIC"] = existing
         except Exception as e:
             self.logger.error(f"获取音乐配置数据失败: {e}", exc_info=True)
@@ -247,6 +295,7 @@ class MusicCacheWidget(QWidget):
             self.music_api_key_edit.clear()
             index = self.music_quality_combo.findText("320k")
             self.music_quality_combo.setCurrentIndex(index if index >= 0 else 0)
+            self.music_volume_slider.setValue(50)
             self.logger.info("音乐配置已重置为默认值")
         except Exception as e:
             self.logger.error(f"重置音乐配置失败: {e}", exc_info=True)
