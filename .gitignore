@@ -37,4 +37,4 @@ nuitka_build_pyqt5_backup/
 .cache/
 
 # 唤醒词
-.models/
+*.onnx
