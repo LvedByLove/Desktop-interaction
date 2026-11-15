@@ -1452,17 +1452,17 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         if self._internal_drag:
             # 从托盘往外拖文件：不要唤醒捕捉带，否则会把文件又接回中转站
             return
-        self.logger.info("疑似拖拽开始：显示 OLE 捕捉窗口")
+        self.logger.debug("疑似拖拽开始：显示 OLE 捕捉窗口")
         if self._ole_catcher:
             try:
                 self._ole_catcher.show()
             except Exception as e:
-                self.logger.debug(f"显示捕捉窗口失败: {e}")
+                self.logger.warning(f"显示捕捉窗口失败: {e}")
 
     def _on_global_drag_ended(self):
         """拖拽结束（松开左键）：隐藏捕捉窗口，唤醒薄条回落待命态。"""
         self._drag_active = False
-        self.logger.info("拖拽结束：隐藏 OLE 捕捉窗口")
+        self.logger.debug("拖拽结束：隐藏 OLE 捕捉窗口")
         if self._ole_catcher:
             # 必须延后隐藏：松开左键时系统才把 Drop 投递给捕捉窗口，
             # pynput 的松手信号往往先到几毫秒。若立即隐藏，窗口已不在
@@ -1474,7 +1474,7 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
             try:
                 root_object.unwakeBall()
             except Exception as e:
-                self.logger.debug(f"唤醒薄条回落失败: {e}")
+                self.logger.warning(f"唤醒薄条回落失败: {e}")
         self._hide_tray_window_if_idle()
 
     def _hide_catcher_if_idle(self, catcher):
@@ -1484,11 +1484,11 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         try:
             catcher.hide()
         except Exception as e:
-            self.logger.debug(f"隐藏捕捉窗口失败: {e}")
+            self.logger.warning(f"隐藏捕捉窗口失败: {e}")
 
     def _on_file_drag_entered(self):
         """OLE 确认文件/文件夹拖拽经过顶部目标区：唤醒薄条作为可拖放目标。"""
-        self.logger.info("OLE 命中文件拖拽：唤醒中转站")
+        self.logger.debug("OLE 命中文件拖拽：唤醒中转站")
         root_object = self.tray_qml.rootObject() if self.tray_qml else None
         if root_object and hasattr(root_object, "wakeBall"):
             try:
@@ -1502,14 +1502,14 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
                     else:
                         self._show_tray_window()
             except Exception as e:
-                self.logger.debug(f"唤醒中转站失败: {e}")
+                self.logger.warning(f"唤醒中转站失败: {e}")
         # 中转站窗口 show()/raise_() 后可能压到捕捉窗口上面；重新置顶，
         # 保证落在薄条/面板区域的拖放仍由原生窗口接收（否则模态时会被拒绝）
         if self._ole_catcher:
             try:
                 self._ole_catcher.raise_above()
             except Exception as e:
-                self.logger.debug(f"重新置顶 OLE 捕捉窗口失败: {e}")
+                self.logger.warning(f"重新置顶 OLE 捕捉窗口失败: {e}")
 
     def _on_files_dropped(self, urls):
         """
@@ -1626,7 +1626,7 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
                     self._ole_catcher.set_suppress_drops(True)
                     self._ole_catcher.hide()
                 except Exception as e:
-                    self.logger.debug(f"暂停 OLE 捕捉窗口失败: {e}")
+                    self.logger.warning(f"暂停 OLE 捕捉窗口失败: {e}")
             try:
                 drag.exec(Qt.CopyAction | Qt.MoveAction, Qt.CopyAction)
             finally:

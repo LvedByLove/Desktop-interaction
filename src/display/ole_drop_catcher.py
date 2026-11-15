@@ -344,7 +344,7 @@ def _drag_enter(this, pdataobj, grf_key_state, pt, pdw_effect):
         or _pdataobj_has_format(pdataobj, CF_HDROP, TYMED_ISTREAM)
     )
     if is_file and catcher is not None:
-        logger.info(f"OLE 检测到文件拖拽进入目标区 位置=({pt.x},{pt.y})")
+        logger.debug(f"OLE 检测到文件拖拽进入目标区 位置=({pt.x},{pt.y})")
         # 不隐藏：保持窗口在最上层，由本窗口的 Drop 原生接收文件。
         # 这样即使中转站窗口被模态对话框禁用、或被其它置顶窗口压住，
         # 拖放也仍然落在本窗口上，不会被 Qt 拒绝。
@@ -381,7 +381,7 @@ def _drag_leave(this):
 
 @DROP_FN
 def _drop(this, pdataobj, grf_key_state, pt, pdw_effect):
-    logger.info("OLE Drop 回调触发")
+    logger.debug("OLE Drop 回调触发")
     catcher = _ACTIVE_CATCHER
     if catcher is None or catcher._suppress_drops:
         # 拖出中转站时自己发起的拖拽（或异常状态）：不接管，避免文件被加回
@@ -392,7 +392,7 @@ def _drop(this, pdataobj, grf_key_state, pt, pdw_effect):
     catcher._drop_enabled = False
     paths = _get_hdrop_paths(pdataobj)
     if not paths:
-        logger.info("OLE Drop 未解析到文件路径，忽略本次拖放")
+        logger.warning("OLE Drop 未解析到文件路径，忽略本次拖放")
         pdw_effect[0] = DROPEFFECT_NONE
         return S_OK
 
@@ -475,7 +475,7 @@ class OleDropCatcher(QObject):
         try:
             _user32.PostMessageW(self._hwnd, WM_APP_SHOW, 0, 0)
         except Exception as e:
-            logger.debug(f"显示 OLE 捕捉窗口失败: {e}")
+            logger.warning(f"显示 OLE 捕捉窗口失败: {e}")
 
     def hide(self):
         """隐藏隐形捕捉窗口。"""
@@ -486,7 +486,7 @@ class OleDropCatcher(QObject):
         try:
             _user32.PostMessageW(self._hwnd, WM_APP_HIDE, 0, 0)
         except Exception as e:
-            logger.debug(f"隐藏 OLE 捕捉窗口失败: {e}")
+            logger.warning(f"隐藏 OLE 捕捉窗口失败: {e}")
 
     def raise_above(self):
         """把捕捉窗口重新提到置顶层。
