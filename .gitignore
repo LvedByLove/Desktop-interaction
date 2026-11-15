@@ -36,5 +36,5 @@ nuitka_build_pyqt5_backup/
 *.log
 .cache/
 
-#唤醒词
-models/
+# 唤醒词
+.models/
