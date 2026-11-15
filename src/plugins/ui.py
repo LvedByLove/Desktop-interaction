@@ -552,6 +552,23 @@ class UIPlugin(Plugin):
         if await self.app.connect_protocol():
             await self.app.protocol.send_wake_word_detected(text)
 
+    async def on_wake_listening_started(self) -> None:
+        """唤醒词触发：显示聆听界面，让用户明确知道已唤醒."""
+        self._clear_transcript()
+        if self.display and hasattr(self.display, "show_listening"):
+            try:
+                await self.display.show_listening()
+            except Exception as e:
+                logger.warning(f"显示唤醒聆听界面失败: {e}")
+
+    async def on_wake_listening_stopped(self) -> None:
+        """唤醒会话结束：收起聆听界面."""
+        if self.display and hasattr(self.display, "hide_listening"):
+            try:
+                await self.display.hide_listening()
+            except Exception as e:
+                logger.debug(f"收起唤醒聆听界面失败: {e}")
+
     async def _press(self):
         """
         手动模式：按下开始录音.

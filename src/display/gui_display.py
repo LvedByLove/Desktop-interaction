@@ -107,6 +107,8 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         self.root = None
         self.qml_widget = None
         self.system_tray = None
+        # 当前已打开的设置窗口（单例：重复点击“设置”只把已有窗口带到前台）
+        self._settings_window = None
 
         # 数据模型
         self.display_model = GuiDisplayModel()
@@ -640,12 +642,80 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         if self.root:
             self.root.close()
         t3 = time.perf_counter()
+
+        # close() 会通过 QTimer.singleShot(0) 延迟隐藏窗口，先让这些事件执行完，
+        # 再显式销毁 Quick 控件（否则会回调已销毁的窗口）。
+        try:
+            if self.app is not None:
+                self.app.processEvents()
+        except Exception:
+            pass
+        self._destroy_quick_widgets()
+
         self.logger.info(
             "GuiDisplay 关闭耗时: "
             f"clear={1000 * (t1 - t0):.1f}ms, "
             f"stop_drag_watcher={1000 * (t2 - t1):.1f}ms, "
             f"root.close={1000 * (t3 - t2):.1f}ms"
         )
+
+    def _destroy_quick_widgets(self):
+        """显式销毁 QQuickWidget 等 Qt Quick 对象.
+
+        QQuickWidget 内部持有 Qt Quick 场景图与渲染线程（Windows 上是
+        D3D11 + DXGI VSync 服务）。如果进程退出时这些对象还活着，Qt 在
+        DLL 卸载阶段会打印：
+            QDxgiVSyncService not destroyed in time
+            QThreadStorage: entry N destroyed before end of thread ...
+        在正常关闭路径里主动卸载 QML 源并 deleteLater，让渲染线程先归位，
+        避免退出时出现上述告警。
+        """
+        from PySide6.QtCore import QCoreApplication
+
+        # 先卸载 QML 根对象，再销毁 widget
+        for attr in ("qml_widget", "tray_qml"):
+            widget = getattr(self, attr, None)
+            if widget is None:
+                continue
+            try:
+                widget.setSource(QUrl())
+            except Exception as e:
+                self.logger.debug(f"卸载 {attr} QML 失败: {e}")
+            try:
+                widget.deleteLater()
+            except Exception as e:
+                self.logger.debug(f"销毁 {attr} 失败: {e}")
+            setattr(self, attr, None)
+
+        # 托盘对象以主窗口为 parent，随主窗口一起销毁
+        tray = self.system_tray
+        self.system_tray = None
+        if tray is not None:
+            try:
+                tray.deleteLater()
+            except Exception:
+                pass
+
+        for attr in ("root", "tray_root"):
+            obj = getattr(self, attr, None)
+            if obj is None:
+                continue
+            try:
+                obj.deleteLater()
+            except Exception as e:
+                self.logger.debug(f"销毁 {attr} 失败: {e}")
+            setattr(self, attr, None)
+
+        # 立即处理 DeferredDelete，确保析构在事件循环停止前真正执行
+        try:
+            QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        except Exception:
+            pass
+        try:
+            if self.app is not None:
+                self.app.processEvents()
+        except Exception:
+            pass
 
     # =========================================================================
     # 启动流程
@@ -1233,11 +1303,34 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
     def _on_settings_button_click(self):
         """
         处理设置请求.
+
+        设置窗口同时只允许存在一个：如果已经打开但被遮挡/最小化，直接
+        激活并带到前台，而不是再创建一个新的窗口。
         """
         try:
+            # 已打开：把已有窗口带到前台（托盘菜单在模态窗口打开时仍可点击，
+            # 不拦截的话会不断 exec() 出新的设置窗口）
+            existing = self._settings_window
+            if existing is not None:
+                try:
+                    if existing.isVisible():
+                        if existing.isMinimized():
+                            existing.showNormal()
+                        else:
+                            existing.show()
+                        existing.raise_()
+                        existing.activateWindow()
+                        self.logger.debug("设置窗口已打开，激活现有窗口")
+                        return
+                except RuntimeError:
+                    # 底层 C++ 对象已销毁
+                    pass
+                self._settings_window = None
+
             from src.views.settings import SettingsWindow
 
             settings_window = SettingsWindow(self.root)
+            self._settings_window = settings_window
             # 窗口级模态：只阻塞主胶囊窗口，不禁用中转站这类独立顶层窗口。
             # exec() 默认是应用级模态，会把中转站窗口一并禁用并拦截其鼠标事件，
             # 导致设置页打开时文件无法拖入、也无法从中转站拖出。
@@ -1252,6 +1345,17 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
             settings_window.exec()
         except Exception as e:
             self.logger.error(f"打开设置窗口失败: {e}", exc_info=True)
+        finally:
+            # exec() 返回说明窗口已关闭；如果期间没有新的窗口实例被创建，
+            # 清空引用，下次点击会重新打开。
+            try:
+                if (
+                    self._settings_window is not None
+                    and not self._settings_window.isVisible()
+                ):
+                    self._settings_window = None
+            except RuntimeError:
+                self._settings_window = None
 
     def _on_hidden_mode_changed(self, is_hidden: bool):
         """
@@ -1888,6 +1992,10 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
                     self.logger.warning("关闭超时，强制退出")
                     shutdown_task.cancel()
                 QApplication.quit()
+                # 上次实测：quit() 后进程仍可能留在后台（托盘/嵌套事件循环
+                # 未退出），并继续占用单实例锁。这里直接硬退出兜底。
+                self.logger.warning("强制结束进程")
+                os._exit(0)
 
             shutdown_task.add_done_callback(on_shutdown_complete)
             QTimer.singleShot(self.QUIT_TIMEOUT_MS, force_quit)

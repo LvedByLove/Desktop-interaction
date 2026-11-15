@@ -717,6 +717,12 @@ class SettingsWindow(QDialog):
                     self.logger.warning("重启关闭超时，强制退出")
                     shutdown_task.cancel()
                 QApplication.quit()
+                # QApplication.quit() 在有托盘图标/嵌套事件循环时未必能让
+                # 进程真正退出，旧进程会一直占着单实例互斥锁，导致新实例
+                # 直接“检测到已有实例运行”后退出。既然用户要求重启，这里
+                # 直接硬退出，保证锁被释放，新实例能正常启动。
+                self.logger.warning("强制结束当前进程以完成重启")
+                os._exit(0)
 
             # 新实例等待旧进程最多10秒，兜底超时需短于该值
             QTimer.singleShot(3000, force_quit)

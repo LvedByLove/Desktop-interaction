@@ -70,22 +70,41 @@ class WakeWordPlugin(Plugin):
             except Exception as e:
                 logger.warning(f"关闭唤醒词检测器失败: {e}")
 
+    def set_detection_muted(self, muted: bool) -> None:
+        """对话期间临时静音唤醒检测，避免 TTS/回声重复触发."""
+        detector = self.detector
+        if detector is not None:
+            try:
+                detector.set_muted(muted)
+            except Exception as e:
+                logger.debug(f"设置唤醒检测静音失败: {e}")
+
     async def _on_detected(self, wake_word, full_text):
-        # 检测到唤醒词：切到自动对话（根据 AEC 自动选择实时/自动停）
+        # 检测到唤醒词：开始一次唤醒会话
+        logger.info(f"[唤醒词] 触发对话: {full_text}")
         try:
-            # 若正在说话，交给应用的打断/状态机处理
-            if hasattr(self.app, "device_state") and hasattr(
-                self.app, "start_auto_conversation"
-            ):
-                if self.app.is_speaking():
-                    await self.app.abort_speaking(AbortReason.WAKE_WORD_DETECTED)
-                    audio_plugin = self.app.plugins.get_plugin("audio")
-                    if audio_plugin and audio_plugin.codec:
-                        await audio_plugin.codec.clear_audio_queue(
-                            channel=OUTPUT_CHANNEL_TTS
-                        )
-                else:
-                    await self.app.start_auto_conversation()
+            if not hasattr(self.app, "start_wake_conversation"):
+                return
+
+            # 已在唤醒会话中（理论上已被静音，不会走到这里）直接忽略
+            if getattr(self.app, "wake_session_active", False):
+                logger.info("[唤醒词] 当前已在对话中，忽略重复唤醒")
+                return
+
+            # 若正在播报，先打断，再进入聆听
+            if self.app.is_speaking():
+                await self.app.abort_speaking(AbortReason.WAKE_WORD_DETECTED)
+                audio_plugin = self.app.plugins.get_plugin("audio")
+                if audio_plugin and audio_plugin.codec:
+                    await audio_plugin.codec.clear_audio_queue(
+                        channel=OUTPUT_CHANNEL_TTS
+                    )
+
+            await self.app.start_wake_conversation()
+            if not self.app.is_audio_channel_opened():
+                logger.warning(
+                    "唤醒后协议通道未打开，请检查网络或服务端配置"
+                )
         except Exception as e:
             logger.error(f"处理唤醒词检测失败: {e}", exc_info=True)
 

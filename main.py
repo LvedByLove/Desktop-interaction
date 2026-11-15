@@ -28,90 +28,129 @@ os.environ["QT_QUICK_CONTROLS_STYLE"] = "Basic"
 _single_instance_lock = None
 
 # 单实例运行检测
-def check_single_instance() -> bool:
+def check_single_instance(wait_seconds: float = 0.0) -> bool:
     """
     检查是否已有实例在运行.
-    
+
+    Args:
+        wait_seconds: 抢锁的最长等待时间。自重启时旧进程需要一点时间释放
+            互斥锁，新实例应短暂重试而不是立刻退出。
+
     Returns:
         bool: 如果是第一个实例返回 True，否则返回 False
     """
     global _single_instance_lock
 
     if sys.platform == "win32":
-        # Windows 使用命名互斥锁，句柄必须保持引用，否则会被释放导致检测失效。
+        import time
+
         import win32api
         import win32event
         import winerror
 
         mutex_name = "Local\\xiaozhi_ai_client_single_instance"
-        try:
-            mutex = win32event.CreateMutex(None, False, mutex_name)
-            if win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS:
+        deadline = time.monotonic() + max(0.0, float(wait_seconds))
+        while True:
+            try:
+                # 命名互斥锁，句柄必须保持引用，否则会被释放导致检测失效。
+                mutex = win32event.CreateMutex(None, False, mutex_name)
+                if win32api.GetLastError() != winerror.ERROR_ALREADY_EXISTS:
+                    _single_instance_lock = mutex
+                    return True
                 win32api.CloseHandle(mutex)
-                return False
+            except Exception:
+                # 如果无法创建互斥锁（如缺少 pywin32），允许运行（降级处理）
+                return True
 
-            _single_instance_lock = mutex
-            return True
-        except Exception:
-            # 如果无法创建互斥锁（如缺少 pywin32），允许运行（降级处理）
-            return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.2)
     else:
+        import time
+
         # Linux/macOS 使用文件锁
         import fcntl
         import os
-        
+
         lock_file_path = "/tmp/xiaozhi_ai_client.lock"
-        try:
-            lock_file = open(lock_file_path, "w")
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            _single_instance_lock = lock_file
-            return True
-        except BlockingIOError:
-            # 已有实例运行
-            return False
-        except Exception:
-            # 如果无法创建文件锁，允许运行（降级处理）
-            return True
+        deadline = time.monotonic() + max(0.0, float(wait_seconds))
+        while True:
+            lock_file = None
+            try:
+                lock_file = open(lock_file_path, "w")
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                _single_instance_lock = lock_file
+                return True
+            except BlockingIOError:
+                if lock_file is not None:
+                    lock_file.close()
+            except Exception:
+                # 如果无法创建文件锁，允许运行（降级处理）
+                if lock_file is not None:
+                    lock_file.close()
+                return True
+
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.2)
 
 
 from src.application import Application
 from src.utils.logging_config import get_logger, setup_logging
 
 
-def wait_for_parent_exit(parent_pid: int):
+def wait_for_parent_exit(parent_pid: int) -> bool:
     """
     自重启时等待旧进程退出，避免被单实例互斥锁拦截.
+
+    Returns:
+        bool: True 表示旧进程已退出（或无需等待），False 表示等待超时。
     """
     if parent_pid <= 0:
-        return
+        return True
 
     try:
         import os
         import time
 
         if parent_pid == os.getpid():
-            return
+            return True
 
         if sys.platform == "win32":
             import win32api
             import win32con
             import win32event
 
-            handle = win32api.OpenProcess(win32con.SYNCHRONIZE, False, parent_pid)
             try:
-                win32event.WaitForSingleObject(handle, 10000)
+                handle = win32api.OpenProcess(
+                    win32con.SYNCHRONIZE, False, parent_pid
+                )
+            except Exception:
+                # 进程已经不存在
+                return True
+            try:
+                result = win32event.WaitForSingleObject(handle, 12000)
+                if result == win32event.WAIT_TIMEOUT:
+                    logger.warning(
+                        f"等待旧实例(pid={parent_pid})退出超时，尝试继续启动"
+                    )
+                    return False
+                return True
             finally:
                 win32api.CloseHandle(handle)
         else:
-            deadline = time.time() + 10
+            deadline = time.time() + 12
             while time.time() < deadline:
                 try:
                     os.kill(parent_pid, 0)
                 except OSError:
-                    break
+                    return True
                 time.sleep(0.1)
+            logger.warning(f"等待旧实例(pid={parent_pid})退出超时，尝试继续启动")
+            return False
     except Exception as e:
         logger.debug(f"等待旧实例退出失败，继续启动: {e}")
+        return False
 
 logger = get_logger(__name__)
 
@@ -199,17 +238,25 @@ async def start_app(mode: str, protocol: str, skip_activation: bool) -> int:
 
 if __name__ == "__main__":
     exit_code = 1
+    mode = "gui"
     try:
         args = parse_args()
+        mode = args.mode
 
         # 先等旧实例退出：setup_logging 会创建 ConfigManager 并执行
         # PATHS 目录迁移，必须避免与旧进程同时读写日志/缓存目录。
-        wait_for_parent_exit(args.wait_parent_pid)
+        parent_exited = wait_for_parent_exit(args.wait_parent_pid)
         setup_logging()
 
-        if args.mode == "gui" and not check_single_instance():
-            logger.info("检测到已有实例运行，当前实例退出")
-            sys.exit(0)
+        if args.mode == "gui":
+            # 自重启时旧进程可能还在做关闭收尾：多等一会儿再抢锁，
+            # 避免新实例抢先失败退出、旧进程随后才退出导致“重启没反应”。
+            lock_wait = 0.0
+            if args.wait_parent_pid > 0 and not parent_exited:
+                lock_wait = 12.0
+            if not check_single_instance(lock_wait):
+                logger.info("检测到已有实例运行，当前实例退出")
+                sys.exit(0)
 
         # 检测Wayland环境并设置Qt平台插件配置
         import os
@@ -313,4 +360,41 @@ if __name__ == "__main__":
         logger.error(f"程序异常退出: {e}", exc_info=True)
         exit_code = 1
     finally:
+        if mode == "gui":
+            # 先尝试正常退出：让 Qt 有机会销毁 QQuickWidget / 场景图 / 渲染
+            # 线程。直接 os._exit 虽然能避免残留线程卡住进程，但会跳过 Qt
+            # 清理，退出时打印 QDxgiVSyncService / QThreadStorage 警告。
+            try:
+                from PySide6.QtWidgets import QApplication
+
+                qt_app = QApplication.instance()
+                if qt_app is not None:
+                    qt_app.closeAllWindows()
+                    qt_app.processEvents()
+            except Exception:
+                pass
+
+            # 兜底：正常退出若被残留的非守护线程卡住，3 秒后硬退出，
+            # 保证单实例锁被释放（守护线程不会阻止解释器退出）。
+            try:
+                import threading
+                import time
+
+                def _force_exit_later():
+                    time.sleep(3.0)
+                    os._exit(exit_code)
+
+                threading.Thread(
+                    target=_force_exit_later, name="hard-exit-guard", daemon=True
+                ).start()
+            except Exception:
+                pass
+
+        # 显式刷新日志后再退出
+        try:
+            import logging
+
+            logging.shutdown()
+        except Exception:
+            pass
         sys.exit(exit_code)

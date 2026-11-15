@@ -45,6 +45,12 @@ class ConfigManager:
             "KEYWORDS_SCORE": 1.8,
             "KEYWORDS_THRESHOLD": 0.2,
             "NUM_TRAILING_BLANKS": 1,
+            # True: 一次唤醒只进行一轮对话，回答结束/超时后自动断开连接回到待命
+            # False: 旧行为，保持长连接持续对话
+            "SINGLE_TURN": True,
+            # 唤醒后多少秒内既没有说话也没有服务端消息，就自动结束本次唤醒
+            # （<=0 表示不超时）
+            "IDLE_TIMEOUT_SECONDS": 15,
         },
         "CAMERA": {
             "camera_index": 0,

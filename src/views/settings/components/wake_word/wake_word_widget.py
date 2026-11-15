@@ -64,6 +64,9 @@ class WakeWordWidget(QWidget):
         self.keywords_threshold_slider = None
         self.score_value_label = None
         self.threshold_value_label = None
+        # 会话行为控件
+        self.single_turn_check = None
+        self.idle_timeout_spin = None
 
         # 声母表（用于拼音分割）
         self.initials = [
@@ -179,9 +182,30 @@ class WakeWordWidget(QWidget):
         threshold_row.addWidget(self.keywords_threshold_slider, 1)
         threshold_row.addWidget(self.threshold_value_label)
 
+        # 会话行为
+        self.single_turn_check = QCheckBox(
+            "一次唤醒只进行一轮对话（回答结束/超时后自动断开）"
+        )
+        self.single_turn_check.setChecked(True)
+        self.single_turn_check.setToolTip(
+            "开启后：唤醒一次→说一句话→回答完自动回到待命；\n"
+            "关闭后：保持长连接，可持续对话（旧行为）。"
+        )
+
+        self.idle_timeout_spin = QSpinBox()
+        self.idle_timeout_spin.setRange(0, 120)
+        self.idle_timeout_spin.setSuffix(" 秒")
+        self.idle_timeout_spin.setSpecialValueText("不超时")
+        self.idle_timeout_spin.setValue(15)
+        self.idle_timeout_spin.setToolTip(
+            "唤醒后这段时间内既没有说话、也没有服务端消息，就自动结束本次唤醒。"
+        )
+
         form.addRow(QLabel("线程数:"), self.num_threads_spin)
         form.addRow(QLabel("关键词得分:"), score_row)
         form.addRow(QLabel("关键词阈值:"), threshold_row)
+        form.addRow(self.single_turn_check)
+        form.addRow(QLabel("无对话超时:"), self.idle_timeout_spin)
 
         hint = QLabel("得分越高越严格，阈值越低越敏感。修改后重启生效。")
         hint.setWordWrap(True)
@@ -193,6 +217,8 @@ class WakeWordWidget(QWidget):
         self.keywords_threshold_slider.valueChanged.connect(
             self._on_threshold_slider_changed
         )
+        self.single_turn_check.toggled.connect(self._emit_settings_changed)
+        self.idle_timeout_spin.valueChanged.connect(self._emit_settings_changed)
 
         # 插到垂直 spacer 之前
         insert_at = max(0, content_layout.count() - 1)
@@ -277,6 +303,28 @@ class WakeWordWidget(QWidget):
                 self.keywords_threshold_slider.setValue(
                     int(round(threshold * 20))
                 )
+
+            # 会话行为
+            if self.single_turn_check is not None:
+                self.single_turn_check.setChecked(
+                    bool(
+                        self.config_manager.get_config(
+                            "WAKE_WORD_OPTIONS.SINGLE_TURN", True
+                        )
+                    )
+                )
+            if self.idle_timeout_spin is not None:
+                try:
+                    timeout = int(
+                        float(
+                            self.config_manager.get_config(
+                                "WAKE_WORD_OPTIONS.IDLE_TIMEOUT_SECONDS", 15
+                            )
+                        )
+                    )
+                except (TypeError, ValueError):
+                    timeout = 15
+                self.idle_timeout_spin.setValue(max(0, min(120, timeout)))
 
         except Exception as e:
             self.logger.error(f"加载唤醒词配置值失败: {e}", exc_info=True)
@@ -566,6 +614,14 @@ class WakeWordWidget(QWidget):
                 config_data["WAKE_WORD_OPTIONS.KEYWORDS_THRESHOLD"] = round(
                     self.keywords_threshold_slider.value() * 0.05, 2
                 )
+            if self.single_turn_check is not None:
+                config_data["WAKE_WORD_OPTIONS.SINGLE_TURN"] = (
+                    self.single_turn_check.isChecked()
+                )
+            if self.idle_timeout_spin is not None:
+                config_data["WAKE_WORD_OPTIONS.IDLE_TIMEOUT_SECONDS"] = (
+                    self.idle_timeout_spin.value()
+                )
 
         except Exception as e:
             self.logger.error(f"获取唤醒词配置数据失败: {e}", exc_info=True)
@@ -615,6 +671,14 @@ class WakeWordWidget(QWidget):
                 )
                 self.keywords_threshold_slider.setValue(
                     int(round(threshold * 20))
+                )
+            if self.single_turn_check is not None:
+                self.single_turn_check.setChecked(
+                    bool(wake_word_config.get("SINGLE_TURN", True))
+                )
+            if self.idle_timeout_spin is not None:
+                self.idle_timeout_spin.setValue(
+                    int(wake_word_config.get("IDLE_TIMEOUT_SECONDS", 15))
                 )
 
             self.logger.info("唤醒词配置已重置为默认值")

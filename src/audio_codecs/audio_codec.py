@@ -121,6 +121,9 @@ class AudioCodec:
         # 回调和监听器（解耦外部依赖）
         self._encoded_callback: Optional[Callable] = None
         self._audio_listeners: List[AudioListener] = []
+        # 监听器在 PortAudio 回调线程里遍历，启动/停止时在主线程增删，
+        # 必须加锁，否则关闭瞬间可能触发 "list changed size during iteration"
+        self._listeners_lock = threading.Lock()
 
         # 音频处理器（可选注入）
         self.audio_processor = audio_processor
@@ -733,7 +736,9 @@ class AudioCodec:
                     logger.warning(f"实时录音编码失败: {e}")
 
             # 步骤7: 通知音频监听器（解耦唤醒词检测）
-            for listener in self._audio_listeners:
+            with self._listeners_lock:
+                listeners = tuple(self._audio_listeners)
+            for listener in listeners:
                 try:
                     listener.on_audio_data(audio_data_int16.copy())
                 except Exception as e:
@@ -929,9 +934,10 @@ class AudioCodec:
             wake_word_detector = WakeWordDetector()  # 实现了 on_audio_data 方法
             audio_codec.add_audio_listener(wake_word_detector)
         """
-        if listener not in self._audio_listeners:
-            self._audio_listeners.append(listener)
-            logger.info(f"已添加音频监听器: {listener.__class__.__name__}")
+        with self._listeners_lock:
+            if listener not in self._audio_listeners:
+                self._audio_listeners.append(listener)
+                logger.info(f"已添加音频监听器: {listener.__class__.__name__}")
 
     def remove_audio_listener(self, listener: AudioListener):
         """移除音频监听器.
@@ -939,14 +945,23 @@ class AudioCodec:
         Args:
             listener: 要移除的监听器对象
         """
-        if listener in self._audio_listeners:
-            self._audio_listeners.remove(listener)
-            logger.info(f"已移除音频监听器: {listener.__class__.__name__}")
+        with self._listeners_lock:
+            if listener in self._audio_listeners:
+                self._audio_listeners.remove(listener)
+                logger.info(f"已移除音频监听器: {listener.__class__.__name__}")
 
     def _validate_output_channel(self, channel: str) -> str:
         if channel not in self._output_buffers:
             raise ValueError(f"未知输出通道: {channel}")
         return channel
+
+    def has_pending_audio(self, channel: str = OUTPUT_CHANNEL_TTS) -> bool:
+        """该输出通道是否还有未播完的数据（含重采样缓冲）."""
+        queue = self._output_buffers.get(channel)
+        if queue is not None and not queue.empty():
+            return True
+        buffer = self._resample_output_buffers.get(channel)
+        return bool(buffer)
 
     def set_channel_volume(self, channel: str, volume: float) -> None:
         """设置逻辑输出通道音量."""
@@ -1458,7 +1473,8 @@ class AudioCodec:
 
             # 2. 清空回调和监听器
             self._encoded_callback = None
-            self._audio_listeners.clear()
+            with self._listeners_lock:
+                self._audio_listeners.clear()
 
             # 3. 清空队列和缓冲区
             await self.clear_audio_queue()

@@ -2,6 +2,8 @@ import asyncio
 import os
 from typing import Any
 
+import numpy as np
+
 from src.audio_codecs.audio_channels import OUTPUT_CHANNEL_TTS
 from src.audio_codecs.audio_codec import AudioCodec
 from src.plugins.base import Plugin
@@ -11,6 +13,9 @@ logger = get_logger(__name__)
 
 # 常量配置
 MAX_CONCURRENT_AUDIO_SENDS = 4
+
+# 唤醒会话期间判定"用户正在说话"的麦克风峰值（int16）
+_VOICE_ACTIVITY_PEAK = 2000
 
 
 class AudioPlugin(Plugin):
@@ -43,6 +48,10 @@ class AudioPlugin(Plugin):
             # 暴露给应用，便于唤醒词插件使用
             self.app.audio_codec = self.codec
 
+            # 注册麦克风活动监听：唤醒会话期间用于判定"用户正在说话"，
+            # 避免用户话说得久、服务端又迟迟没有消息时被超时误关闭。
+            self.codec.add_audio_listener(self)
+
             # 后台预热按住说话音效，避免首次触发时 FFmpeg 解码延迟
             self.app.spawn(
                 self._preload_hold_talk_sound(), name="audio:preload_effects"
@@ -57,6 +66,24 @@ class AudioPlugin(Plugin):
             from src.utils.hold_talk_sound import HoldTalkSound
 
             await HoldTalkSound().preload()
+        except Exception:
+            pass
+
+    def on_audio_data(self, audio_data: np.ndarray) -> None:
+        """音频监听回调（PortAudio 线程）：唤醒会话期间上报用户说话活动.
+
+        只做一次最大值计算和一次时间戳赋值，开销可以忽略。
+        """
+        app = self.app
+        if app is None or not getattr(app, "wake_session_active", False):
+            return
+        try:
+            if len(audio_data) == 0:
+                return
+            # 转 int32 避免 np.abs(-32768) 的 int16 溢出
+            peak = int(np.max(np.abs(audio_data.astype(np.int32))))
+            if peak >= _VOICE_ACTIVITY_PEAK:
+                app.notify_wake_voice_activity()
         except Exception:
             pass
 

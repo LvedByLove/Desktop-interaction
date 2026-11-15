@@ -2,6 +2,7 @@ import asyncio
 import re
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Awaitable
 
@@ -70,6 +71,12 @@ class Application:
             ListeningMode.REALTIME if self.aec_enabled else ListeningMode.AUTO_STOP
         )
         self.keep_listening = False
+        # 唤醒词单轮会话状态：一次唤醒只进行一轮对话，结束/超时后断开连接
+        self.wake_session_active = False
+        # 本轮唤醒中是否已经收到服务端识别出的用户语音
+        self._wake_user_spoke = False
+        self._wake_activity_time = 0.0
+        self._wake_watchdog_task: asyncio.Task | None = None
         # 中止标记：True 表示本轮已中止，抑制音频采集
         self.aborted = False
         # 播报中标志：以服务端 tts start/stop 为准。
@@ -199,6 +206,7 @@ class Application:
     # -------------------------
     async def start_listening_manual(self) -> None:
         try:
+            self._clear_wake_session_for_takeover()
             ok = await self.connect_protocol()
             if not ok:
                 return
@@ -240,6 +248,7 @@ class Application:
     # -------------------------
     async def start_auto_conversation(self) -> None:
         try:
+            self._clear_wake_session_for_takeover()
             ok = await self.connect_protocol()
             if not ok:
                 return
@@ -253,6 +262,196 @@ class Application:
             await self.set_device_state(DeviceState.LISTENING)
         except Exception:
             pass
+
+    # -------------------------
+    # 唤醒词单轮会话（一次唤醒 = 一轮对话）
+    # -------------------------
+    def _wake_single_turn_enabled(self) -> bool:
+        try:
+            return bool(
+                self.config.get_config("WAKE_WORD_OPTIONS.SINGLE_TURN", True)
+            )
+        except Exception:
+            return True
+
+    def _wake_idle_timeout_seconds(self) -> float:
+        try:
+            return float(
+                self.config.get_config("WAKE_WORD_OPTIONS.IDLE_TIMEOUT_SECONDS", 15)
+            )
+        except Exception:
+            return 15.0
+
+    def notify_wake_voice_activity(self) -> None:
+        """麦克风检测到用户说话（音频线程调用），用于续期无对话超时."""
+        if self.wake_session_active:
+            self._wake_activity_time = time.monotonic()
+
+    def mark_wake_conversation_activity(self) -> None:
+        """收到服务端 STT/TTS 消息，说明对话已经开始."""
+        if self.wake_session_active:
+            self._wake_activity_time = time.monotonic()
+
+    async def start_wake_conversation(self) -> None:
+        """唤醒词触发：开始一轮对话，结束后自动断开回到待命.
+
+        WAKE_WORD_OPTIONS.SINGLE_TURN=False 时回退为旧的持续对话行为。
+        """
+        if not self._wake_single_turn_enabled():
+            await self.start_auto_conversation()
+            return
+
+        if self.wake_session_active:
+            return
+
+        self.wake_session_active = True
+        self.keep_listening = False
+        self.listening_mode = ListeningMode.AUTO_STOP
+        self.aborted = False
+        self.drop_incoming_tts = False
+        self._wake_user_spoke = False
+        self._wake_activity_time = time.monotonic()
+
+        # 对话期间静音唤醒检测，避免 TTS 回声再次触发唤醒
+        self._set_wake_detection_muted(True)
+        # 明确显示聆听界面，让用户知道已被唤醒
+        await self._notify_wake_listening(True)
+
+        try:
+            ok = await self.connect_protocol()
+            if ok:
+                await self.protocol.send_start_listening(ListeningMode.AUTO_STOP)
+                await self.set_device_state(DeviceState.LISTENING)
+        except Exception as e:
+            logger.error(f"[唤醒词] 开始对话失败: {e}", exc_info=True)
+            ok = False
+
+        if not ok:
+            await self.end_wake_conversation(reason="连接失败", close_delay=0.0)
+            return
+
+        # 连接成功后再启动无对话超时看门狗
+        self._cancel_wake_watchdog()
+        self._wake_watchdog_task = self.spawn(
+            self._wake_idle_watchdog(), "wake:idle_watchdog"
+        )
+        logger.info("[唤醒词] 进入单轮对话，等待用户说话")
+
+    async def _wake_idle_watchdog(self) -> None:
+        """唤醒后长时间没有任何对话活动则自动结束本轮."""
+        timeout = self._wake_idle_timeout_seconds()
+        if timeout <= 0:
+            return
+
+        while self.wake_session_active:
+            await asyncio.sleep(0.5)
+            if not self.wake_session_active:
+                return
+            idle = time.monotonic() - self._wake_activity_time
+            if idle >= timeout:
+                logger.info(
+                    "[唤醒词] 唤醒后 %.0f 秒没有检测到对话，自动结束", timeout
+                )
+                # 没有任何回答音频，无需等待尾部播放，立即断开
+                await self.end_wake_conversation(
+                    reason="无对话超时", close_delay=0.0
+                )
+                return
+
+    async def end_wake_conversation(
+        self, reason: str = "对话结束", *, close_delay: float = 2.0
+    ) -> None:
+        """结束当前唤醒会话：收起聆听界面并断开协议连接.
+
+        close_delay 用于等待本地 TTS 队列播完，避免回答尾音被截断。
+        """
+        if not self.wake_session_active:
+            return
+
+        self.wake_session_active = False
+        self.keep_listening = False
+        self._cancel_wake_watchdog()
+        logger.info(f"[唤醒词] 本轮对话结束: {reason}")
+
+        await self._notify_wake_listening(False)
+
+        try:
+            if self.is_audio_channel_opened():
+                await self.protocol.send_stop_listening()
+        except Exception as e:
+            logger.debug(f"发送停止聆听失败: {e}")
+
+        await self.set_device_state(DeviceState.IDLE)
+
+        if close_delay > 0:
+            await asyncio.sleep(close_delay)
+
+        # 等本地 TTS 队列真正播完再断开（最多 10 秒），避免回答尾音被截断
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline and self._has_pending_tts_audio():
+            await asyncio.sleep(0.2)
+
+        try:
+            if self.is_audio_channel_opened():
+                await asyncio.wait_for(
+                    self.protocol.close_audio_channel(), timeout=2.0
+                )
+                logger.info("[唤醒词] 对话连接已关闭，回到待命")
+        except Exception as e:
+            logger.debug(f"关闭唤醒会话连接失败: {e}")
+
+        # 连接关闭后再恢复唤醒检测，避免回答尾音触发下一次唤醒
+        self._set_wake_detection_muted(False)
+
+    def _has_pending_tts_audio(self) -> bool:
+        try:
+            audio_plugin = self.plugins.get_plugin("audio")
+            codec = getattr(audio_plugin, "codec", None)
+            if codec is not None and hasattr(codec, "has_pending_audio"):
+                return bool(codec.has_pending_audio(OUTPUT_CHANNEL_TTS))
+        except Exception:
+            pass
+        return False
+
+    def _cancel_wake_watchdog(self) -> None:
+        task = self._wake_watchdog_task
+        self._wake_watchdog_task = None
+        if task is not None and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+
+    def _clear_wake_session_for_takeover(self) -> None:
+        """用户手动接管（按住说话/自动对话）时放弃单轮会话状态."""
+        if not self.wake_session_active:
+            return
+        logger.info("[唤醒词] 用户手动接管，取消本次唤醒会话")
+        self.wake_session_active = False
+        self._cancel_wake_watchdog()
+        self._set_wake_detection_muted(False)
+
+    def _set_wake_detection_muted(self, muted: bool) -> None:
+        try:
+            plugin = self.plugins.get_plugin("wake_word")
+            if plugin and hasattr(plugin, "set_detection_muted"):
+                plugin.set_detection_muted(muted)
+        except Exception as e:
+            logger.debug(f"设置唤醒检测静音失败: {e}")
+
+    async def _notify_wake_listening(self, active: bool) -> None:
+        """通知 UI 显示/收起唤醒聆听界面."""
+        try:
+            plugin = self.plugins.get_plugin("ui")
+            if not plugin:
+                return
+            method = (
+                "on_wake_listening_started"
+                if active
+                else "on_wake_listening_stopped"
+            )
+            handler = getattr(plugin, method, None)
+            if handler is not None:
+                await handler()
+        except Exception as e:
+            logger.debug(f"更新唤醒聆听界面失败: {e}")
 
     def _setup_protocol_callbacks(self) -> None:
         self.protocol.on_network_error(self._on_network_error)
@@ -315,6 +514,8 @@ class Application:
         #     self._shutdown_event.set()
 
     def _on_incoming_audio(self, data: bytes):
+        # 唤醒会话中持续收到服务端音频，说明对话仍在进行（避免长回答被超时截断）
+        self.mark_wake_conversation_activity()
         logger.debug(f"收到二进制消息，长度: {len(data)}")
         # 转发给插件
         self.spawn(self.plugins.notify_incoming_audio(data), "plugin:on_audio")
@@ -326,10 +527,17 @@ class Application:
             # 服务端告警/错误：把完整内容记下来，否则只看到 type 无从排查
             if msg_type in ("alert", "error"):
                 logger.warning(f"服务端告警消息: {json_data}")
+            # 唤醒会话中：收到识别结果/大模型消息说明对话仍在进行，续期超时
+            if msg_type == "stt" and json_data.get("text"):
+                self._wake_user_spoke = True
+                self.mark_wake_conversation_activity()
+            elif msg_type == "llm":
+                self.mark_wake_conversation_activity()
             # 将 TTS start/stop 映射为设备状态（支持自动/实时，且不污染手动模式）
             if msg_type == "tts":
                 state = json_data.get("state")
                 if state == "start":
+                    self.mark_wake_conversation_activity()
                     self.tts_active = True
                     self.drop_incoming_tts = False
                     # 仅当保持会话且实时模式时，TTS开始期间保持LISTENING；否则显示SPEAKING
@@ -348,7 +556,24 @@ class Application:
                         )
                 elif state == "stop":
                     self.tts_active = False
-                    if (
+                    if self.wake_session_active:
+                        if self._wake_user_spoke:
+                            # 单轮唤醒：回答播报结束即结束本轮并断开连接。
+                            # 留 2 秒给本地 TTS 队列播完，避免截断尾音。
+                            self.spawn(
+                                self.end_wake_conversation(
+                                    reason="回答结束", close_delay=2.0
+                                ),
+                                "wake:end_after_tts",
+                            )
+                        else:
+                            # 用户还没说话（例如服务端下发的问候播报）：
+                            # 不结束会话，继续等待用户开口
+                            logger.info(
+                                "[唤醒词] 收到非用户触发的播报，继续等待用户说话"
+                            )
+                            self.mark_wake_conversation_activity()
+                    elif (
                         self.listening_mode == ListeningMode.MANUAL
                         and self.device_state == DeviceState.LISTENING
                     ):
@@ -510,6 +735,7 @@ class Application:
             if not suppress_capture:
                 # 按住说话需要立刻采集，不沿用上一次的抑制标记
                 self.aborted = False
+            self._end_wake_session_after_abort()
             return
 
         logger.info(f"中止语音输出，原因: {reason}")
@@ -520,6 +746,15 @@ class Application:
         await self._flush_tts_audio()
         await self.protocol.send_abort_speaking(reason)
         await self.set_device_state(DeviceState.IDLE)
+        self._end_wake_session_after_abort()
+
+    def _end_wake_session_after_abort(self) -> None:
+        """唤醒会话被用户中断：结束本次会话并断开."""
+        if self.wake_session_active:
+            self.spawn(
+                self.end_wake_conversation("用户中断", close_delay=0.5),
+                "wake:end_after_abort",
+            )
 
     async def _flush_tts_audio(self) -> None:
         """清空本地 TTS 输出队列并恢复音乐音量，让打断立即生效."""
@@ -582,14 +817,20 @@ class Application:
         self.running = False
 
         try:
-            # 取消所有登记任务
+            # 取消所有登记任务（限时，避免某个任务不响应取消卡住整个关闭流程）
             pending = [t for t in self._tasks if not t.done()]
             if pending:
                 logger.info(f"正在取消 {len(pending)} 个任务...")
                 for task in pending:
                     task.cancel()
-                await asyncio.gather(*self._tasks, return_exceptions=True)
-                logger.info("所有任务已取消")
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*pending, return_exceptions=True),
+                        timeout=3.0,
+                    )
+                    logger.info("所有任务已取消")
+                except asyncio.TimeoutError:
+                    logger.warning("取消后台任务超时，继续关闭")
             self._tasks.clear()
 
             # 关闭协议（限时，避免阻塞退出）
