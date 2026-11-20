@@ -45,9 +45,11 @@ class CameraWidget(QWidget):
 
         # 预览相关
         self.camera = None
-        self.preview_timer = QTimer()
+        self.preview_timer = QTimer(self)
         self.preview_timer.timeout.connect(self._update_preview_frame)
         self.is_previewing = False
+        # 设置窗口关闭后阻止延迟触发的自动预览再次占用摄像头
+        self._shutting_down = False
 
         # 初始化UI
         self._setup_ui()
@@ -416,6 +418,8 @@ class CameraWidget(QWidget):
         """
         开始预览摄像头.
         """
+        if self._shutting_down:
+            return
         try:
             if self.is_previewing:
                 self._stop_preview()
@@ -575,12 +579,27 @@ class CameraWidget(QWidget):
         except Exception as e:
             self.logger.error(f"清理摄像头资源失败: {e}", exc_info=True)
 
+    def shutdown(self):
+        """释放摄像头与预览定时器（设置窗口关闭时调用，可重复调用）."""
+        self._shutting_down = True
+        try:
+            self.preview_timer.stop()
+        except Exception as e:
+            self.logger.warning(f"停止摄像头预览定时器失败: {e}")
+        self.is_previewing = False
+        # 无论是否处于预览状态都释放，避免直接关闭设置时摄像头句柄残留
+        self._cleanup_camera()
+        try:
+            self._update_preview_buttons(False)
+        except Exception:
+            pass
+
     def closeEvent(self, event):
         """
         组件关闭时清理资源.
         """
         try:
-            self._stop_preview()
+            self.shutdown()
         except Exception as e:
             self.logger.error(f"关闭摄像头组件失败: {e}", exc_info=True)
         super().closeEvent(event)

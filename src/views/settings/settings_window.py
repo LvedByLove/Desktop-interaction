@@ -730,6 +730,29 @@ class SettingsWindow(QDialog):
         except Exception as e:
             self.logger.error(f"直接重启失败: {e}", exc_info=True)
 
+    def done(self, result: int):
+        """对话框结束（保存 / 取消 / 关闭窗口）前先释放页面占用的外部资源.
+
+        QDialog 的 accept()、reject() 与窗口关闭最终都会走到 done()，而
+        closeEvent 只覆盖点关闭按钮这一条路径，因此在这里统一清理。
+        """
+        try:
+            self.release_resources()
+        except Exception as e:
+            self.logger.warning(f"释放设置页资源失败: {e}")
+        super().done(result)
+
+    def release_resources(self):
+        """释放懒加载页面的外部资源（可重复调用）."""
+        for attr in ("camera_tab", "audio_tab"):
+            tab = getattr(self, attr, None)
+            shutdown = getattr(tab, "shutdown", None)
+            if callable(shutdown):
+                try:
+                    shutdown()
+                except Exception as e:
+                    self.logger.warning(f"释放设置页资源失败 ({attr}): {e}")
+
     def closeEvent(self, event):
         """
         窗口关闭事件.

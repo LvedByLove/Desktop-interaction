@@ -52,6 +52,10 @@ class AudioWidget(QWidget):
         # 扫描状态
         self._scan_in_progress = False
 
+        # 设置窗口关闭后，后台线程（扫描 / 录音 / 播放测试）仍在运行时
+        # 不再向已销毁的控件发信号
+        self._shutting_down = False
+
         # 初始化UI
         self._setup_ui()
         self._connect_events()
@@ -214,9 +218,13 @@ class AudioWidget(QWidget):
         """
         self._scan_devices_async()
 
+    def shutdown(self):
+        """设置窗口关闭时调用：阻止后台线程继续向已销毁的控件发信号."""
+        self._shutting_down = True
+
     def _scan_devices_async(self):
         """在后台线程枚举音频设备，结果通过信号回到 UI 线程."""
-        if self._scan_in_progress:
+        if self._shutting_down or self._scan_in_progress:
             return
         self._scan_in_progress = True
         self._append_status("正在扫描音频设备...")
@@ -267,10 +275,20 @@ class AudioWidget(QWidget):
                         }
                     )
 
-            self.devices_scanned.emit(inputs, outputs)
+            if not self._shutting_down:
+                try:
+                    self.devices_scanned.emit(inputs, outputs)
+                except RuntimeError:
+                    # 控件已随设置窗口销毁
+                    pass
         except Exception as e:
             self.logger.error(f"扫描音频设备失败: {e}", exc_info=True)
-            self.scan_failed.emit(str(e))
+            if not self._shutting_down:
+                try:
+                    self.scan_failed.emit(str(e))
+                except RuntimeError:
+                    # 控件已随设置窗口销毁
+                    pass
 
     def _apply_scanned_devices(self, inputs: list, outputs: list):
         """UI 线程：应用后台扫描结果."""
@@ -597,8 +615,12 @@ class AudioWidget(QWidget):
         self.ui_controls["test_input_btn"].setText("测试录音")
 
     def _reset_input_ui_threadsafe(self):
+        if self._shutting_down:
+            return
         try:
             self.reset_input_ui.emit()
+        except RuntimeError:
+            pass
         except Exception as e:
             self.logger.error(f"线程安全重置输入测试UI失败: {e}")
 
@@ -611,8 +633,12 @@ class AudioWidget(QWidget):
         self.ui_controls["test_output_btn"].setText("测试播放")
 
     def _reset_output_ui_threadsafe(self):
+        if self._shutting_down:
+            return
         try:
             self.reset_output_ui.emit()
+        except RuntimeError:
+            pass
         except Exception as e:
             self.logger.error(f"线程安全重置输出测试UI失败: {e}")
 
@@ -636,12 +662,17 @@ class AudioWidget(QWidget):
         """
         后台线程安全地将状态文本追加到 QTextEdit（通过信号切回主线程）。
         """
+        if self._shutting_down:
+            return
         try:
             if not self.ui_controls.get("status_text"):
                 return
             current_time = time.strftime("%H:%M:%S")
             formatted_message = f"[{current_time}] {message}"
             self.status_message.emit(formatted_message)
+        except RuntimeError:
+            # 控件已随设置窗口销毁
+            pass
         except Exception as e:
             self.logger.error(f"线程安全追加状态失败: {e}", exc_info=True)
 

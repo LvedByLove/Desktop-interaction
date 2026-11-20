@@ -1382,12 +1382,19 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
                 screen_rect.left() + (screen_rect.width() - settings_window.width()) // 2,
                 screen_rect.top() + (screen_rect.height() - settings_window.height()) // 2,
             )
-            settings_window.exec()
+            try:
+                settings_window.exec()
+            finally:
+                # exec() 返回说明窗口已关闭。QDialog 关闭时默认只隐藏、不销毁，
+                # 而它又是 self.root 的子控件，所以仅清空 Python 引用并不能释放：
+                # 每打开一次设置都会在进程里永久残留一整棵窗口树（实测约 6-10MB）。
+                # 这里显式销毁，并清空引用，下次点击重新创建。
+                self._dispose_settings_window(settings_window)
         except Exception as e:
             self.logger.error(f"打开设置窗口失败: {e}", exc_info=True)
         finally:
-            # exec() 返回说明窗口已关闭；如果期间没有新的窗口实例被创建，
-            # 清空引用，下次点击会重新打开。
+            # 兼容“窗口已打开时直接激活”的提前返回路径：此处只清引用，不销毁，
+            # 因为那个窗口仍在显示中。
             try:
                 if (
                     self._settings_window is not None
@@ -1396,6 +1403,17 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
                     self._settings_window = None
             except RuntimeError:
                 self._settings_window = None
+
+    def _dispose_settings_window(self, window):
+        """彻底销毁已关闭的设置窗口，释放其懒加载页面与全部控件."""
+        if self._settings_window is window:
+            self._settings_window = None
+        try:
+            window.hide()
+            window.deleteLater()
+        except RuntimeError:
+            # 底层 C++ 对象已被销毁
+            pass
 
     def _on_hidden_mode_changed(self, is_hidden: bool):
         """
