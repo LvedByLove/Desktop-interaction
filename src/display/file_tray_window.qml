@@ -5,8 +5,17 @@ import QtQuick.Layouts
 Rectangle {
     id: root
 
-    // 保持原来的深色外观：变形只改变几何尺寸和文字显隐，不做颜色过渡
-    color: Qt.rgba(20/255, 20/255, 20/255, 0.94)
+    // 灰白面板配色：变形只改变几何尺寸和文字显隐，不做颜色过渡
+    readonly property color panelBackgroundColor: "#f6f7f9"
+    readonly property color primaryTextColor: "#111827"
+    readonly property color secondaryTextColor: "#6b7280"
+    readonly property color surfaceHoverColor: "#e8ebef"
+    readonly property color surfacePressedColor: "#d9dee5"
+    readonly property color accentColor: "#2563eb"
+
+    color: panelBackgroundColor
+    border.color: "#d8dde5"
+    border.width: 1
     radius: 20
 
     // 信号定义 - 与 Python 回调对接
@@ -35,6 +44,7 @@ Rectangle {
     property bool wakeVisible: false   // 拖拽唤醒胶囊（薄条）
     property bool trayVisible: false   // 中转站面板
     property bool wakeReady: false     // 全局拖拽中：就绪等待拖入
+    property bool fileDropArmed: false // 已通过拖放条激活，面板内可继续放置
 
     Behavior on width { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
     Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
@@ -118,6 +128,7 @@ Rectangle {
 
     // 窗口出现：从一条短横线横向展开并淡入（带轻微回弹）
     function appear() {
+        trayCloseTextTimer.stop()
         fadeOut.stop()
         fadeIn.stop()
         wakeTextReveal.stop()
@@ -131,6 +142,7 @@ Rectangle {
     // 窗口已显示但正在淡出（例如刚关闭面板又立刻拖入文件）：
     // 不重置透明度，直接淡回可见，避免闪一下再出现
     function reappear() {
+        trayCloseTextTimer.stop()
         fadeOut.stop()
         wakeTextReveal.stop()
         wakeTextHide.stop()
@@ -142,6 +154,7 @@ Rectangle {
     // 窗口几何由 Python 侧从短横线尺寸动画到薄条尺寸，这里同步让文字延迟淡入，
     // 让「文件 / 文件夹拖到此处」像是横条长出来的。
     function beginLineMorph() {
+        trayCloseTextTimer.stop()
         fadeIn.stop()
         fadeOut.stop()
         trayVisible = false
@@ -158,6 +171,7 @@ Rectangle {
     // 唤醒薄条收回到待机短横线：几何由 Python 侧同步收缩，
     // 最后窗口隐藏时与横线衔接。
     function endLineMorph() {
+        trayCloseTextTimer.stop()
         fadeIn.stop()
         fadeOut.stop()
         wakeReady = false
@@ -166,8 +180,29 @@ Rectangle {
         wakeTextHide.start()
     }
 
+    // 关闭中转站：面板内容切换为拖放条，几何和文字同步连续收拢。
+    function beginTrayCollapse() {
+        beginLineMorph()
+        wakeReady = false
+        fileDropArmed = false
+        wakeTextReveal.stop()
+        wakeTextHide.stop()
+        root.wakeTextOpacity = 1
+        trayCloseTextTimer.restart()
+    }
+
+    // 主界面不在待机态时无法衔接横条，回到原有淡出流程。
+    function prepareTrayFadeOut() {
+        trayCloseTextTimer.stop()
+        trayVisible = false
+        wakeVisible = false
+        wakeReady = false
+        fileDropArmed = false
+    }
+
     // 窗口退出：淡出并轻微收缩，完成后由 fadeOutDone 通知 Python 隐藏
     function fadeOutNow() {
+        trayCloseTextTimer.stop()
         fadeIn.stop()
         fadeOut.restart()
     }
@@ -201,6 +236,7 @@ Rectangle {
 
     function wakeBall() {
         if (trayVisible) return
+        trayCloseTextTimer.stop()
         wakeVisible = true
         wakeReady = true
         wakeTextReveal.stop()
@@ -209,38 +245,45 @@ Rectangle {
         refreshSize()
     }
 
+    function armFileDrop() {
+        fileDropArmed = true
+    }
+
     function unwakeBall() {
+        trayCloseTextTimer.stop()
         wakeReady = false
         if (trayVisible) return
+        fileDropArmed = false
         wakeTextReveal.stop()
         wakeTextHide.start()
         wakeVisible = false
     }
 
     function openFileTray() {
+        trayCloseTextTimer.stop()
         wakeVisible = false
         wakeReady = false
         wakeTextReveal.stop()
         wakeTextHide.stop()
         root.wakeTextOpacity = 0
         trayVisible = true
+        fileDropArmed = true
         refreshSize()
     }
 
     function closeFileTray() {
         if (!trayVisible) return
-        trayVisible = false
-        wakeVisible = false
-        wakeReady = false
         root.fileTrayClosed()
     }
 
     // 拖拽中途离开空的中转站：回到唤醒薄条，允许同一趟拖拽再次拖回
     function returnToWake() {
         if (!trayVisible) return
+        trayCloseTextTimer.stop()
         trayVisible = false
         wakeVisible = true
         wakeReady = true
+        fileDropArmed = false
         wakeTextReveal.stop()
         wakeTextHide.stop()
         root.wakeTextOpacity = 1
@@ -288,7 +331,7 @@ Rectangle {
                 text: "文件 / 文件夹拖到此处"
                 font.family: "Microsoft YaHei UI"
                 font.pixelSize: 10
-                color: Qt.rgba(255/255, 255/255, 255/255, 0.75)
+                color: root.secondaryTextColor
                 opacity: 1.0
 
                 // 等待拖入时轻微呼吸，让唤醒胶囊显得"有生命"
@@ -338,7 +381,7 @@ Rectangle {
                     font.family: "Microsoft YaHei UI"
                     font.pixelSize: 12
                     font.weight: Font.DemiBold
-                    color: Qt.rgba(255/255, 255/255, 255/255, 0.9)
+                    color: root.primaryTextColor
                 }
 
                 Item { Layout.fillWidth: true }
@@ -347,7 +390,7 @@ Rectangle {
                     text: "注意：不要删除源路径上的源文件"
                     font.family: "Microsoft YaHei UI"
                     font.pixelSize: 9
-                    color: Qt.rgba(255/255, 255/255, 255/255, 0.4)
+                    color: root.secondaryTextColor
                     Layout.alignment: Qt.AlignVCenter
                 }
 
@@ -355,7 +398,11 @@ Rectangle {
                     Layout.preferredWidth: 22
                     Layout.preferredHeight: 22
                     radius: 11
-                    color: trayCloseArea.pressed ? "#2a2a2a" : "transparent"
+                    color: trayCloseArea.pressed
+                        ? root.surfacePressedColor
+                        : trayCloseArea.containsMouse
+                            ? root.surfaceHoverColor
+                            : "transparent"
                     Layout.alignment: Qt.AlignVCenter
 
                     Text {
@@ -363,7 +410,9 @@ Rectangle {
                         text: "×"
                         font.family: "Microsoft YaHei UI"
                         font.pixelSize: 16
-                        color: Qt.rgba(255/255, 255/255, 255/255, 0.7)
+                        color: trayCloseArea.containsMouse
+                            ? root.primaryTextColor
+                            : root.secondaryTextColor
                     }
 
                     MouseArea {
@@ -384,7 +433,7 @@ Rectangle {
                 text: "拖动文件 / 文件夹到这里"
                 font.family: "Microsoft YaHei UI"
                 font.pixelSize: 12
-                color: Qt.rgba(255/255, 255/255, 255/255, 0.4)
+                color: root.secondaryTextColor
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
             }
@@ -502,8 +551,12 @@ Rectangle {
                                 height: 44
                                 radius: 10
                                 anchors.horizontalCenter: parent.horizontalCenter
-                                color: model.selected ? Qt.rgba(0, 120/255, 215/255, 0.35) : "transparent"
-                                border.color: model.selected ? Qt.rgba(0, 170/255, 255/255, 0.95) : Qt.rgba(255/255, 255/255, 255/255, 0.08)
+                                color: model.selected
+                                    ? Qt.rgba(37/255, 99/255, 235/255, 0.12)
+                                    : "transparent"
+                                border.color: model.selected
+                                    ? root.accentColor
+                                    : "#dfe3e8"
                                 border.width: model.selected ? 2 : 1
 
                                 Image {
@@ -521,7 +574,7 @@ Rectangle {
                                 text: root.fileBasename(model.path)
                                 font.family: "Microsoft YaHei UI"
                                 font.pixelSize: 8
-                                color: Qt.rgba(255/255, 255/255, 255/255, 0.6)
+                                color: root.secondaryTextColor
                                 horizontalAlignment: Text.AlignHCenter
                                 elide: Text.ElideMiddle
                             }
@@ -582,51 +635,67 @@ Rectangle {
                 Rectangle {
                     id: selectionRect
                     visible: false
-                    color: Qt.rgba(0, 140/255, 220/255, 0.15)
-                    border.color: Qt.rgba(0, 170/255, 255/255, 0.7)
+                    color: Qt.rgba(37/255, 99/255, 235/255, 0.10)
+                    border.color: Qt.rgba(37/255, 99/255, 235/255, 0.65)
                     border.width: 1
                 }
             }
         }
     }
 
-    // 拖入热区：文件拖到唤醒薄条上立即展开中转站；拖离后若为空则回到薄条
+    // 拖入热区：首次必须命中顶部拖放条；激活并展开后，面板任意位置均可放置。
     DropArea {
         id: fileDropArea
         anchors.fill: parent
         keys: ["text/uri-list"]
+        enabled: root.wakeVisible || root.trayVisible || root.fileDropArmed
 
         onEntered: function (drag) {
             if (!drag.hasUrls) return
+            if (!root.fileDropArmed && !root.wakeVisible && !root.trayVisible) {
+                drag.ignore()
+                return
+            }
+            root.fileDropArmed = true
             root.wakeReady = false
-            if (!trayVisible) root.openFileTray()
+            drag.accept(Qt.CopyAction)
         }
 
         onExited: {
-            if (trayVisible && fileTrayRepeater.count === 0) {
+            if (root.trayVisible && fileTrayRepeater.count === 0) {
                 root.returnToWake()
             }
         }
 
         onDropped: function (drop) {
             if (!drop.hasUrls) return
+            if (!root.fileDropArmed) {
+                return
+            }
             drop.accept(Qt.CopyAction)
             var urls = []
             for (var i = 0; i < drop.urls.length; i++) {
                 urls.push(String(drop.urls[i]))
             }
             root.filesDropped(urls)
-            if (!trayVisible) root.openFileTray()
+            if (!root.trayVisible) root.openFileTray()
         }
     }
 
     // 中转站清空 1s 后自动关闭（避免空面板一直停留）
     Timer {
+        id: trayCloseTextTimer
+        interval: 150
+        repeat: false
+        onTriggered: root.endLineMorph()
+    }
+
+    Timer {
         id: trayEmptyAutoCloseTimer
         interval: 1000
         repeat: false
         onTriggered: {
-            if (trayVisible && fileTrayRepeater.count === 0) {
+            if (root.trayVisible && fileTrayRepeater.count === 0) {
                 root.closeFileTray()
             }
         }

@@ -92,7 +92,7 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
     # 中转站唤醒条从这条短横线“长出来”
     STANDBY_LINE_SIZE = (64, 5)
     # 待机短横线与屏幕顶部的间距
-    TOP_MARGIN = 5
+    TOP_MARGIN = 3
     # 展开后的尺寸
     EXPANDED_SIZE = (320, 280)
     DEFAULT_FONT_SIZE = 12
@@ -133,6 +133,8 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         self._tray_target_rect = None
         # 收缩回待机短横线的几何动画结束后，需要隐藏窗口
         self._tray_collapse_pending = False
+        # 关闭中转站时的连续几何动画：panel -> standby line
+        self._tray_close_stage = None
 
         # 表情管理
         self._emotion_cache = {}
@@ -1069,6 +1071,7 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
 
     def _fade_out_tray_window(self):
         """淡出中转站窗口；完成后由 fadeOutDone 信号触发隐藏。"""
+        self._tray_close_stage = None
         root_object = self.tray_qml.rootObject() if self.tray_qml else None
         if root_object and hasattr(root_object, "fadeOutNow"):
             try:
@@ -1114,6 +1117,7 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         """中转站窗口尺寸变化：始终保持在主屏顶部居中，并做平滑几何过渡。"""
         if not self.tray_root:
             return
+        self._tray_close_stage = None
         screen_rect = primary_available_geometry()
         new_x = screen_rect.left() + (screen_rect.width() - width) // 2
         new_y = screen_rect.top()
@@ -1155,9 +1159,19 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
             return False
 
     def _on_tray_geometry_anim_finished(self):
-        """几何动画结束：若是收回待机短横线，则隐藏窗口，与横线无缝衔接。"""
+        """几何动画结束：处理关闭中转站的连续收缩与普通横条回缩。"""
+        if self._tray_close_stage == "to_line":
+            self._finish_tray_close_animation()
+            return
         if not self._tray_collapse_pending:
             return
+        self._tray_collapse_pending = False
+        if self.tray_root:
+            self.tray_root.hide()
+
+    def _finish_tray_close_animation(self):
+        """中转站已收拢到待机横条位置：隐藏辅助窗口并复位动画状态。"""
+        self._tray_close_stage = None
         self._tray_collapse_pending = False
         if self.tray_root:
             self.tray_root.hide()
@@ -1201,6 +1215,7 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
             return
 
         was_visible = self.tray_root.isVisible()
+        self._tray_close_stage = None
         # 若正处在收回动画中，取消它，从当前几何反向展开
         self._tray_collapse_pending = False
         if not was_visible:
@@ -1239,6 +1254,31 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
             self._tray_collapse_pending = False
             if self.tray_root:
                 self.tray_root.hide()
+
+    def _collapse_tray_to_standby_line(self):
+        """关闭面板：完整面板连续收拢到主界面待机短横线。"""
+        root_object = self.tray_qml.rootObject() if self.tray_qml else None
+        if not (self.tray_root and self.tray_root.isVisible() and root_object):
+            return False
+
+        target_rect = self._main_standby_line_rect()
+        if target_rect is None:
+            return False
+
+        try:
+            root_object.beginTrayCollapse()
+        except Exception as e:
+            self.logger.debug(f"启动中转站收拢动画失败: {e}")
+            return False
+
+        self._tray_collapse_pending = False
+        self._tray_close_stage = "to_line"
+        if not self._animate_tray_geometry(target_rect, 300):
+            self._tray_close_stage = None
+            self._finish_tray_close_animation()
+            return False
+
+        return True
 
     # =========================================================================
     # 按钮事件处理
@@ -1586,27 +1626,27 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         if self._drag_active or catcher is not self._ole_catcher:
             return
         try:
+            catcher.reset_drop_armed()
             catcher.hide()
         except Exception as e:
             self.logger.warning(f"隐藏捕捉窗口失败: {e}")
 
     def _on_file_drag_entered(self):
-        """OLE 确认文件/文件夹拖拽经过顶部目标区：唤醒薄条作为可拖放目标。"""
-        self.logger.debug("OLE 命中文件拖拽：唤醒中转站")
+        """文件首次命中拖放条：只显示拖放条，释放后再展开中转站。"""
+        self.logger.debug("OLE 命中拖放条：显示可放置的拖放条")
         root_object = self.tray_qml.rootObject() if self.tray_qml else None
         if root_object and hasattr(root_object, "wakeBall"):
             try:
-                # 先按唤醒薄条尺寸调整窗口，再显示，避免闪现默认尺寸
+                root_object.armFileDrop()
+                # 先按拖放条尺寸调整窗口，再显示，避免直接弹出面板。
                 root_object.wakeBall()
-                # 中转站面板已打开时 wakeBall 会直接返回（trayVisible），无需再唤醒
                 if bool(root_object.property("wakeVisible")):
                     if self._can_morph_from_standby_line():
-                        # 主胶囊是待机短横线：让它“长成”唤醒薄条
                         self._show_tray_window_from_line(root_object)
                     else:
                         self._show_tray_window()
             except Exception as e:
-                self.logger.warning(f"唤醒中转站失败: {e}")
+                self.logger.warning(f"显示拖放条失败: {e}")
         # 中转站窗口 show()/raise_() 后可能压到捕捉窗口上面；重新置顶，
         # 保证落在薄条/面板区域的拖放仍由原生窗口接收（否则模态时会被拒绝）
         if self._ole_catcher:
@@ -1786,12 +1826,26 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
             self.logger.debug(f"中转站清空选中失败: {e}")
 
     def _on_file_tray_closed(self):
-        """关闭中转站时清空所有暂存文件（仅移除引用，不动磁盘原文件），并淡出隐藏窗口。"""
+        """关闭中转站时清空暂存文件，并收回为拖放条、待机横条。"""
+        if self._ole_catcher:
+            try:
+                self._ole_catcher.reset_drop_armed()
+            except Exception as e:
+                self.logger.debug(f"复位 OLE 拖放激活状态失败: {e}")
         try:
             self._file_tray.clear()
             self.logger.info("中转站已关闭，已清空所有暂存文件")
         except Exception as e:
             self.logger.error(f"清空中转站失败: {e}", exc_info=True)
+        root_object = self.tray_qml.rootObject() if self.tray_qml else None
+        can_dock = self._can_morph_from_standby_line()
+        if can_dock and self._collapse_tray_to_standby_line():
+            return
+        if root_object and hasattr(root_object, "prepareTrayFadeOut"):
+            try:
+                root_object.prepareTrayFadeOut()
+            except Exception as e:
+                self.logger.debug(f"准备中转站淡出失败: {e}")
         self._fade_out_tray_window()
 
     # =========================================================================

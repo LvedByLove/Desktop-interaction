@@ -8,13 +8,13 @@ Windows 原生 OLE 拖放（DoDragDrop）会向注册的 drop target 发送 Drag
 
 设计（PoC 已验证）：
   - 独立线程 + Win32 消息循环，与 Qt 主线程隔离。
-  - 一个不可见的窄带窗口（主屏顶部居中 800x200，TOPMOST/NOACTIVATE/Layerd alpha=1）。
+  - 一个不可见的窄带窗口（主屏顶部居中，覆盖拖放条及少量透明容差）。
   - 平时 SW_HIDE：隐藏窗口不参与 OLE 命中测试，不挡任何点击。
   - pynput 检测到"疑似拖拽开始"→ 显示窗口；拖拽期间鼠标被拖放源捕获，
     窗口挡不到任何点击，误显示零代价。
   - DragEnter 时 QueryGetData(CF_HDROP)：
-      * 命中 → 发射 fileDragEntered 唤醒中转站界面，并保持窗口可见，
-        由 Drop 回调原生解析 CF_HDROP 取出路径（不依赖 Qt 窗口接收拖放）；
+      * 命中 → 激活中转站并保持窗口可见；首次必须命中拖放条，
+        展开后允许在面板任意位置释放；
       * 未命中 → 隐藏自身并返回 DROPEFFECT_NONE，把非文件拖拽放行给下面的窗口。
   - 松开左键（pynput）→ 隐藏窗口。
 
@@ -348,14 +348,16 @@ def _drag_enter(this, pdataobj, grf_key_state, pt, pdw_effect):
         # 不隐藏：保持窗口在最上层，由本窗口的 Drop 原生接收文件。
         # 这样即使中转站窗口被模态对话框禁用、或被其它置顶窗口压住，
         # 拖放也仍然落在本窗口上，不会被 Qt 拒绝。
-        catcher._drop_enabled = True
+        # 方案 B：首次命中拖放条后激活本次拖放。焦点离开窄热区
+        # 进入已展开的面板时仍保留激活状态，最终由 QML DropArea 接收。
+        catcher._drop_armed = True
         # 跨线程发射：Qt 自动队列投递到主线程槽
         catcher.fileDragEntered.emit()
         pdw_effect[0] = DROPEFFECT_COPY
         return S_OK
     # 非文件拖拽：隐藏自身，把拖拽放行给下面的窗口
     if catcher is not None:
-        catcher._drop_enabled = False
+        catcher._drop_armed = False
         _user32.ShowWindow(catcher._hwnd, SW_HIDE)
     pdw_effect[0] = DROPEFFECT_NONE
     return S_FALSE
@@ -364,7 +366,7 @@ def _drag_enter(this, pdataobj, grf_key_state, pt, pdw_effect):
 @DRAGOVER_FN
 def _drag_over(this, grf_key_state, pt, pdw_effect):
     catcher = _ACTIVE_CATCHER
-    if catcher is not None and catcher._drop_enabled and not catcher._suppress_drops:
+    if catcher is not None and catcher._drop_armed and not catcher._suppress_drops:
         pdw_effect[0] = DROPEFFECT_COPY
     else:
         pdw_effect[0] = DROPEFFECT_NONE
@@ -374,8 +376,7 @@ def _drag_over(this, grf_key_state, pt, pdw_effect):
 @DRAGLEAVE_FN
 def _drag_leave(this):
     catcher = _ACTIVE_CATCHER
-    if catcher is not None:
-        catcher._drop_enabled = False
+    # 方案 B 的激活状态跨窄热区保留，不能在此处清除。
     return S_OK
 
 
@@ -383,13 +384,18 @@ def _drag_leave(this):
 def _drop(this, pdataobj, grf_key_state, pt, pdw_effect):
     logger.debug("OLE Drop 回调触发")
     catcher = _ACTIVE_CATCHER
-    if catcher is None or catcher._suppress_drops:
+    if catcher is None or catcher._suppress_drops or not catcher._drop_armed:
         # 拖出中转站时自己发起的拖拽（或异常状态）：不接管，避免文件被加回
-        logger.debug(f"OLE Drop 被抑制 (catcher={catcher is not None}, suppress={getattr(catcher, '_suppress_drops', None)})")
+        logger.debug(
+            "OLE Drop 被忽略 "
+            f"(catcher={catcher is not None}, "
+            f"suppress={getattr(catcher, '_suppress_drops', None)}, "
+            f"armed={getattr(catcher, '_drop_armed', None)})"
+        )
         pdw_effect[0] = DROPEFFECT_NONE
         return S_OK
 
-    catcher._drop_enabled = False
+    catcher._drop_armed = False
     paths = _get_hdrop_paths(pdataobj)
     if not paths:
         logger.warning("OLE Drop 未解析到文件路径，忽略本次拖放")
@@ -431,11 +437,12 @@ def _fn_addr(fn):
 
 
 class OleDropCatcher(QObject):
-    """OLE 文件拖拽捕捉器：仅在文件拖拽经过顶部目标区时通知主界面。"""
+    """OLE 文件拖拽捕捉器：拖放条负责首次激活，展开面板负责后续放置。"""
 
-    # 目标区：主屏顶部居中（与拖拽唤醒胶囊出现位置一致）
-    ZONE_WIDTH = 800
-    ZONE_HEIGHT = 100
+    # 激活热区：覆盖 570x16 拖放条，并在四周增加透明容差，
+    # 避免用户必须精确命中只有十几像素高的可见区域。
+    ZONE_WIDTH = 586
+    ZONE_HEIGHT = 32
 
     # 文件拖拽进入目标区（在后台线程发射，Qt 队列投递到主线程）
     fileDragEntered = Signal()
@@ -447,8 +454,8 @@ class OleDropCatcher(QObject):
         self._thread = None
         self._ready = threading.Event()
         self._hwnd = 0
-        # 当前拖拽是否携带文件（DragEnter 判定，DragOver/Drop 依据它决定是否接管）
-        self._drop_enabled = False
+        # 本次拖拽是否已通过顶部拖放条激活（方案 B）
+        self._drop_armed = False
         # 拖出中转站时自己发起的拖拽：忽略落在捕捉带上的 Drop
         self._suppress_drops = False
         # 保持 ctypes 回调与 COM 对象的引用，防止被 GC 回收导致崩溃
@@ -501,6 +508,10 @@ class OleDropCatcher(QObject):
         """拖出中转站期间抑制原生 Drop，避免文件落到顶部带里被又加回中转站。"""
         self._suppress_drops = bool(suppress)
 
+    def reset_drop_armed(self):
+        """关闭中转站后复位激活状态；下一次拖入必须重新命中拖放条。"""
+        self._drop_armed = False
+
     def stop(self):
         """退出后台线程（daemon 线程，join 超时后随进程结束，不会阻塞关闭）。"""
         if not self._thread or not self._thread.is_alive():
@@ -546,7 +557,7 @@ class OleDropCatcher(QObject):
 
             # 目标区：主屏顶部居中（主屏原点即虚拟屏幕原点 (0,0)）
             screen_w = user32.GetSystemMetrics(0)  # SM_CXSCREEN
-            zone_x = (screen_w - self.ZONE_WIDTH) // 2
+            zone_x = max(0, (screen_w - self.ZONE_WIDTH) // 2)
             zone_y = 0
 
             ex_style = WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW

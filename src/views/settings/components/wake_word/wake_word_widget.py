@@ -25,6 +25,7 @@ from src.utils.resource_finder import (
     get_project_root,
     resource_finder,
 )
+from src.views.components.toggle_switch import ToggleSwitch
 
 # 导入拼音转换库
 try:
@@ -183,8 +184,8 @@ class WakeWordWidget(QWidget):
         threshold_row.addWidget(self.threshold_value_label)
 
         # 会话行为
-        self.single_turn_check = QCheckBox(
-            "一次唤醒只进行一轮对话（回答结束/超时后自动断开）"
+        self.single_turn_check = ToggleSwitch(
+            "一次唤醒只进行一次对话（回答结束/超时后自动断开）"
         )
         self.single_turn_check.setChecked(True)
         self.single_turn_check.setToolTip(
