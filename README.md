@@ -44,14 +44,11 @@
 | 原作者 | [`huangjunsen0406`](https://github.com/huangjunsen0406) | 项目作者 |
 | 上游项目 | [`xiaozhi-esp32`](https://github.com/78/xiaozhi-esp32) | 相关上游 |
 
-🙏 感谢原作者和社区提供的基础项目。没有原项目的基础工作，本项目无法完成。
+🙏 感谢原作者和社区提供的基础项目。
 
 ---
 
 ## 🚀 主要改动
-
-本项目基于[`py-xiaozhi`](https://github.com/huangjunsen0406/py-xiaozhi) 项目1.1.8版本（2025/8/19）开始二次创作，也是那年我接触小智，再次感谢您让我可以有一个自己喜欢的桌面互动AI。
-相比原版，本项目主要做了以下方向的修改。
 
 ### 1️⃣ 胶囊常驻式交互界面
 
