@@ -544,11 +544,11 @@ Rectangle {
 
                         Column {
                             anchors.centerIn: parent
-                            spacing: 3
+                            spacing: 2
 
                             Rectangle {
-                                width: 44
-                                height: 44
+                                width: 40
+                                height: 40
                                 radius: 10
                                 anchors.horizontalCenter: parent.horizontalCenter
                                 color: model.selected
@@ -578,6 +578,19 @@ Rectangle {
                                 horizontalAlignment: Text.AlignHCenter
                                 elide: Text.ElideMiddle
                             }
+
+                            // 文件夹 / 文件大小 / 已移动（Shell 缩略图异步加载后填充）
+                            Text {
+                                width: cellSize
+                                text: model.meta ? model.meta : ""
+                                visible: text.length > 0
+                                font.family: "Microsoft YaHei UI"
+                                font.pixelSize: 7
+                                color: root.secondaryTextColor
+                                opacity: 0.75
+                                horizontalAlignment: Text.AlignHCenter
+                                elide: Text.ElideRight
+                            }
                         }
 
                         MouseArea {
@@ -593,6 +606,7 @@ Rectangle {
 
                             ToolTip.visible: containsMouse && !dragStarted
                             ToolTip.text: root.fileBasename(model.path)
+                                + (model.meta ? "\n" + model.meta : "")
                             ToolTip.delay: 300
 
                             onPressed: function (mouse) {

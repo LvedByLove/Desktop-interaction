@@ -22,7 +22,8 @@ Desktop-interaction/
 │   │   ├── cli_display.py        # CLI 模式显示
 │   │   ├── file_drag_watcher.py  # pynput 全局“疑似拖拽”粗检测
 │   │   ├── ole_drop_catcher.py   # Windows OLE 原生拖放捕捉（CF_HDROP 精确判定）
-│   │   ├── file_tray_model.py    # 文件中转站数据源与系统文件图标
+│   │   ├── file_tray_model.py    # 文件中转站数据源与图标角色
+│   │   ├── file_thumbnail_provider.py # Shell 内容缩略图：后台取图 + 回退 + 缓存
 │   │   ├── file_tray_window.qml  # 中转站面板 QML
 │   │   └── region_capture_overlay.py  # 屏幕区域框选截图浮层
 │   ├── iot/                      # IoT 设备抽象（Thing / Property / Method）与设备管理

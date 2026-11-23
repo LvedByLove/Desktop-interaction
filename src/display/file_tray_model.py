@@ -2,107 +2,36 @@
 """文件中转站：数据源 + 系统文件图标供给器.
 
 仅进程内暂存，不持久化到磁盘。路径列表通过 QAbstractListModel 暴露给 QML，
-每个条目提供 path（本地路径）与 icon（图标 PNG 的 file:/// URL）两个角色。
-系统文件/文件夹图标由 QFileIconProvider 生成，落盘为临时 PNG 后以 file:/// URL
-供 QML 直接加载 —— 绕开 QQuickImageProvider 跨版本虚方法签名不稳定的问题。
-"""
+每个条目提供 path（本地路径）、icon（图标 PNG 的 file:/// URL）与 meta
+（文件夹 / 文件大小 / 已移动）三个角色。
 
-import hashlib
-import os
-import tempfile
+图标供给已升级为 Windows Shell 内容缩略图（见 ``file_thumbnail_provider``）：
+图片/视频/文档优先显示真实预览，失败回退系统图标或内置矢量图标；加载在
+后台线程完成，落盘为临时 PNG 后以 file:/// URL 供 QML 直接加载 —— 绕开
+QQuickImageProvider 跨版本虚方法签名不稳定的问题。
+"""
 
 from PySide6.QtCore import (
     QAbstractListModel,
-    QFileInfo,
     QModelIndex,
     Qt,
-    QUrl,
     Signal,
 )
-from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QFileIconProvider
 
-
-class FileIconProvider:
-    """生成系统文件/文件夹图标，缓存为写盘 PNG 的 file:/// URL。
-
-    QFileIconProvider 依赖 QApplication（平台主题），故 QFileIconProvider 延迟到
-    首次请求图标时才创建；把图标提前落盘为 PNG，避免 QML 渲染线程重复做耗时的
-    shell 图标查询。
-    """
-
-    def __init__(self, icon_size=64):
-        self._provider = None
-        self._icon_size = icon_size
-        self._pixmap_cache = {}
-        self._url_cache = {}
-        self._icon_dir = os.path.join(
-            tempfile.gettempdir(), "xiaozhi_file_tray_icons"
-        )
-
-    def _ensure_provider(self):
-        if self._provider is None:
-            self._provider = QFileIconProvider()
-        return self._provider
-
-    def pixmap_for_path(self, path):
-        """返回路径对应的 QPixmap 图标（供中转站面板显示与落盘 PNG 使用）。"""
-        if path in self._pixmap_cache:
-            return self._pixmap_cache[path]
-        icon = self._ensure_provider().icon(QFileInfo(path))
-        if icon.isNull():
-            pixmap = QPixmap(self._icon_size, self._icon_size)
-            pixmap.fill(Qt.transparent)
-        else:
-            pixmap = icon.pixmap(self._icon_size, self._icon_size)
-        self._pixmap_cache[path] = pixmap
-        return pixmap
-
-    def drag_pixmap_for_path(self, path, size=32):
-        """返回路径对应的小尺寸 QPixmap 图标（供拖拽光标使用）。
-
-        单独用小尺寸（默认 32），避免直接复用车载大图标（64）导致拖拽图像
-        明显大于系统资源管理器的拖拽光标。
-        """
-        icon = self._ensure_provider().icon(QFileInfo(path))
-        if icon.isNull():
-            pixmap = QPixmap(size, size)
-            pixmap.fill(Qt.transparent)
-        else:
-            pixmap = icon.pixmap(size, size)
-        return pixmap
-
-    def icon_url_for_path(self, path):
-        """返回路径对应图标的 file:/// URL（PNG 落盘 + 缓存）。"""
-        if path in self._url_cache:
-            return self._url_cache[path]
-
-        url = ""
-        pixmap = self.pixmap_for_path(path)
-        if not pixmap.isNull():
-            try:
-                os.makedirs(self._icon_dir, exist_ok=True)
-                name = hashlib.md5(path.encode("utf-8")).hexdigest() + ".png"
-                png_path = os.path.join(self._icon_dir, name)
-                if not os.path.exists(png_path):
-                    pixmap.save(png_path, "PNG")
-                url = QUrl.fromLocalFile(png_path).toString()
-            except Exception:
-                url = ""
-        self._url_cache[path] = url
-        return url
+from .file_thumbnail_provider import FileIconProvider
 
 
 class FileTrayModel(QAbstractListModel):
     """中转站数据源：维护暂存的文件/文件夹本地路径列表。
 
     用 QAbstractListModel 暴露给 QML（避免 QStringList 属性绑定造成的
-    Repeater model 绑定循环），并提供 path / icon 两个角色。
+    Repeater model 绑定循环），并提供 path / icon / meta 三个角色。
     """
 
     PathRole = Qt.UserRole + 1
     IconRole = Qt.UserRole + 2
     SelectedRole = Qt.UserRole + 3
+    MetadataRole = Qt.UserRole + 4
 
     # 内容变化通知（供 QML 刷新尺寸 / 空态自动关闭）
     changed = Signal()
@@ -117,6 +46,20 @@ class FileTrayModel(QAbstractListModel):
 
     def set_icon_provider(self, provider):
         self._icon_provider = provider
+        # 缩略图异步加载完成后刷新对应行的 icon / meta 角色。
+        try:
+            provider.updated.connect(self._on_icon_updated)
+        except Exception:
+            pass
+
+    def _on_icon_updated(self, path):
+        """供给器加载完成：只刷新该路径所在行。"""
+        try:
+            row = self._paths.index(path)
+        except ValueError:
+            return
+        index = self.index(row, 0)
+        self.dataChanged.emit(index, index, [self.IconRole, self.MetadataRole])
 
     @property
     def paths(self):
@@ -130,6 +73,7 @@ class FileTrayModel(QAbstractListModel):
             self.PathRole: b"path",
             self.IconRole: b"icon",
             self.SelectedRole: b"selected",
+            self.MetadataRole: b"meta",
         }
 
     def rowCount(self, parent=QModelIndex()):
@@ -147,6 +91,10 @@ class FileTrayModel(QAbstractListModel):
             return self._icon_provider.icon_url_for_path(path)
         if role == self.SelectedRole:
             return index.row() in self._selection
+        if role == self.MetadataRole:
+            if self._icon_provider is None:
+                return ""
+            return self._icon_provider.metadata_for_path(path)
         return None
 
     # --- 增删改 ---
