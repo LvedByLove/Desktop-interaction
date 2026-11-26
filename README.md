@@ -32,27 +32,28 @@
 
 📁 目录结构与日志等级说明见 [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)。
 
-⛏️ 项目开发及开发环境运行说明见 [PROJECT_DEVELOPMENT.md](PROJECT DEVELOPMENT.md)
+⛏️ 项目开发及开发环境运行说明见 [PROJECT_DEVELOPMENT.md](PROJECT_DEVELOPMENT.md)
+
+👤 食用方法参考 [USER_MANUAL.md](USER_MANUAL.md)
 
 ---
 
-## 🔗 项目来源
+## 🔗 项目地基
 
 本项目基于以下开源项目开发：
 
 | 类型 | 项目 | 说明 |
 | :--- | :--- | :--- |
 | 原项目 | [`py-xiaozhi`](https://github.com/huangjunsen0406/py-xiaozhi) | 基础项目 |
-| 原作者 | [`huangjunsen0406`](https://github.com/huangjunsen0406) | 项目作者 |
 | 上游项目 | [`xiaozhi-esp32`](https://github.com/78/xiaozhi-esp32) | 相关上游 |
 
 🙏 感谢原作者和社区提供的基础项目。
 
 ---
 
-## 🚀 主要改动
+## 🚀 主体内容
 
-### 1️⃣ 胶囊常驻式交互界面
+### 1️⃣ 胶囊式交互界面
 
 
 - 重做桌面交互界面，做悬浮胶囊界面更灵动
@@ -74,13 +75,15 @@
 - 添加本地音乐播放选择，可以播放选择的音乐文件内音乐，
 -  TTS 播报时不再粗暴中断本地音乐播放，会降低音乐播放声音，让位给tts语言播报，
 -  对话时使用 ducking 方式降低本地音乐播放的音量，TTS 结束后恢复本地音乐播放的音量。
-
+<img src="other_resources/image5.png" alt="音乐控制"/>
+<p>（音乐播放界面默认在屏幕正上方-此图片为展开的音乐控制界面）</P>
 
 ### 4️⃣ 文件中转站
 
 <p align="center">
-  <img src="assets/image/image.png" alt="Desktop-interaction 文件中转站界面截图"/>
+  <img src="other_resources/image7.png" alt="Desktop-interaction 文件中转站界面截图"/>
 </p>
+<p>（文件中转站界面默认在屏幕正上方）</P>
 
 -  可以把日常频繁移动、复制的文件 / 文件夹放置到中转站
 -  不需要频繁切换窗口也可以实现文件位置交换
@@ -99,7 +102,7 @@
 - 添加本地音乐随机播放器工具，支持自动随机播放本地音乐库音乐；
 - 添加本地文件操作工具，可以让ai操作指定电脑区域内的文件
 - 学习了上游项目(<a href="https://github.com/huangjunsen0406/py-xiaozhi">py-xiaozhi</a>)重新设计了ui界面
-<a><img src="assets/image/屏幕截图 2026-11-14 162708_hidden.png"></a>
+<a><img src="other_resources/image2.png"></a>
 
 
 
@@ -108,11 +111,9 @@
 本项目更偏向于：
 
 -  **桌面常驻 AI 助手**
--  **小智语音客户端的桌面体验增强版**
+-  **桌面交互工具**
 -  适合希望在 PC 上体验小智语音交互、MCP 工具和桌面浮窗交互的用户
 -  定位 Windows 电脑桌面辅助人工智能
-
-本项目 **不是从零开发的独立项目**，而是在 `py-xiaozhi` 的基础上做的开发版本。
 
 如果你想要的是一个功能大而全、界面复杂的桌面 AI 客户端，它可能不是最合适的选择。  
 但如果你想要的是一颗安静待在桌面角落、叫它才出来、用完就消失的语音助手，它的设计思路会非常对味。
