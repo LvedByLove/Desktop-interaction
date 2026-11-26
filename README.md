@@ -1,6 +1,6 @@
-# <img src="https://raw.githubusercontent.com/LvedByLove/Desktop-interaction/main/assets\image\Redstone_orange.png" alt="Redstone" width="40" height="40"> Desktop-interaction
+# <img src="assets/image/Redstone.png" alt="Redstone" width="40" height="40"> Desktop-interaction
 
-> 桌面胶囊 · AI 助手 | 基于 [py-xiaozhi](https://github.com/huangjunsen0406/py-xiaozhi) 的桌面交互增强版小智语音客户端。
+> 桌面助手 | Desktop-interaction
 
 <p align="center">
   <a href="https://github.com/LvedByLove/Desktop-interaction">
@@ -23,14 +23,16 @@
 
 ## 📖 项目简介
 
-**Desktop-interaction** 是一个使用 Python 实现的桌面端小智语音客户端。本项目基于开源项目 [py-xiaozhi](https://github.com/huangjunsen0406/py-xiaozhi) 进行二次开发，主要针对 **桌面端交互体验、操作界面、音乐播放体验、本地操作逻辑和文件中转** 做了优化和新增。
+**Desktop-interaction** 是一个使用 Python 实现的桌面端小智语音客户端。本项目基于开源项目 [py-xiaozhi](https://github.com/huangjunsen0406/py-xiaozhi) 进行二次开发，主要针对 **桌面端交互体验、UI操作界面、音乐播放体验、本地操作逻辑和文件中转等** 做了优化和部分功能新增。
 
-原版 `py-xiaozhi` 已经提供了完整的小智语音客户端能力，包括语音对话、TTS 播报、MCP 工具、音乐播放、日程、摄像头识别等功能。本项目在此基础上，更偏向 **“桌面常驻助手”** 的使用体验，希望让它在日常电脑使用中更加自然、轻量、少打扰。
+原版 `py-xiaozhi` 已经提供了完整的小智语音客户端能力，包括语音对话、TTS 播报、MCP 工具、音乐播放、日程、摄像头识别等功能。本项目在此基础上，更偏向 **“桌面常驻助手”** 的使用体验，希望让它在日常电脑使用中更加自然、便捷、少打扰。
 
-一个属于你的桌面 AI 助手，可以让其播放音乐、打开软件、进行智能问答、屏幕截图问答等；定位 Windows 电脑桌面辅助人工智能。
+一个属于你的桌面 AI 助手，可以让其播放音乐、打开软件、进行智能问答、屏幕截图问答等；定位 Windows 系统桌面辅助型人工智能工具。
 
 
 📁 目录结构与日志等级说明见 [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)。
+
+⛏️ 项目开发及开发环境运行说明见 [PROJECT_DEVELOPMENT.md](PROJECT DEVELOPMENT.md)
 
 ---
 
@@ -99,96 +101,7 @@
 - 学习了上游项目(<a href="https://github.com/huangjunsen0406/py-xiaozhi">py-xiaozhi</a>)重新设计了ui界面
 <a><img src="assets/image/屏幕截图 2026-11-14 162708_hidden.png"></a>
 
-## ⚡ 快速开始
 
-> ⚠️注意：本项目更偏向 Windows 桌面场景。
-
----
-
-### 1️⃣ 直接下载安装（Windows 用户）
-
-访问 GitHub Releases：
-
-<a href="https://github.com/LvedByLove/Desktop-interaction/releases">https://github.com/LvedByLove/Desktop-interaction/releases</a>
-
-下载后双击启动安装即可安装使用。
-
----
-
-### 2️⃣ 源码运行（开发者）
-### 🧩 环境要求
-
-| 项 | 要求 |
-| :--- | :--- |
-| <a href="https://www.python.org/downloads/windows/">Python</a> | 3.9+ |
-| <a href="https://ffmpeg.org/download.html">ffmpeg</a> |9.0.2（推荐版本）|
-| <a href="ms-settings:about" data-linktype="external">系统</a> | Windows 10+ / Linux |
-
-> ⚠️本项目使用<a href="https://ffmpeg.org/download.html">ffmpeg</a>进行音乐编码，建议下载<a href="https://ffmpeg.org/download.html">ffmpeg</a>开发效果更完整
-#### 创建虚拟环境
-
-**Windows：**
-
-```bash
-py -m venv .venv
-```
-
-**macOS / Linux：**
-
-```bash
-python3 -m venv .venv
-```
-
-#### 激活虚拟环境
-
-**Windows（CMD）：**
-
-```bash
-.venv\Scripts\activate
-```
-
-> 如果 PowerShell 报权限错误，先执行：
->
-> ```powershell
-> Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
-> ```
->
-> 然后再激活：
->
-> ```powershell
-> .\.venv\Scripts\Activate.ps1
-> ```
-
-**macOS / Linux：**
-
-```bash
-source .venv/bin/activate
-```
-
-
-#### 升级 pip（可选，推荐）
-
-```bash
-python -m pip install --upgrade pip
-```
-
-#### 安装依赖
-
-```bash
-pip install -r requirements.txt
-```
-
-#### 运行程序
-
-```bash
-# GUI 模式（默认）
-python main.py
-
-# CLI 模式
-python main.py --mode cli
-```
-
----
 
 ## 🎯 项目定位
 
