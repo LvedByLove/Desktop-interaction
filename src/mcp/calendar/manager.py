@@ -54,24 +54,34 @@ class CalendarManager:
                 "Create a new calendar event with intelligent duration setting and "
                 "conflict detection. Automatically sets appropriate duration based on "
                 "category if end_time is not provided.\n"
+                "Use this tool for EVERY user reminder request, including short ones "
+                "such as '1分钟后提醒我喝水' — reminders created here appear in the "
+                "on-screen schedule view, and the reminder service notifies the user "
+                "exactly when the event starts. "
+                "Do not use timer.start_countdown for reminders.\n"
                 "Use this tool when user wants to:\n"
                 "1. Schedule a meeting, appointment, or task\n"
                 "2. Create reminders or notifications\n"
                 "3. Block time for work, personal activities\n"
                 "4. Set up recurring activities (meetings, breaks, etc.)\n"
                 "\nIntelligent Duration Rules:\n"
-                "- '提醒', '休息', '站立' category: 5 minutes\n"
+                "- '提醒' category (or title containing '提醒'): point-in-time "
+                "reminder, end_time = start_time, no time span\n"
+                "- '休息', '站立' category: 5 minutes\n"
                 "- '会议', '工作' category: 1 hour\n"
-                "- Title contains '提醒', '站立', '休息': 5 minutes\n"
                 "- Default: 30 minutes\n"
+                "For every reminder (e.g. '15:15提醒我喝水'), set category to "
+                "'提醒' and leave end_time empty so it stays a single time point.\n"
                 "\nArgs:\n"
                 "  title: Event title (required)\n"
                 "  start_time: Start time in ISO format '2024-01-01T10:00:00' "
                 "(required)\n"
-                "  end_time: End time, auto-calculated if not provided\n"
+                "  end_time: End time, auto-calculated if not provided; ignored "
+                "for reminders (point-in-time)\n"
                 "  description: Event description\n"
                 "  category: Event category (默认/工作/个人/会议/提醒)\n"
-                "  reminder_minutes: Reminder time in minutes before event",
+                "  reminder_minutes: Kept for compatibility; reminders fire at "
+                "the event start time",
                 create_event_props,
                 create_event,
             )
@@ -314,6 +324,17 @@ class CalendarManager:
             return [CalendarEvent.from_dict(event_data) for event_data in events_data]
         except Exception as e:
             logger.error(f"获取日程失败: {e}")
+            return []
+
+    def get_events_overlapping(
+        self, start_date: str = None, end_date: str = None
+    ) -> List[CalendarEvent]:
+        """获取与 [start_date, end_date] 区间重叠的事件（含跨天事件）。"""
+        try:
+            events_data = self.db.get_events_overlapping(start_date, end_date)
+            return [CalendarEvent.from_dict(event_data) for event_data in events_data]
+        except Exception as e:
+            logger.error(f"按区间获取日程失败: {e}")
             return []
 
     def update_event(self, event_id: str, **kwargs) -> bool:

@@ -1,8 +1,10 @@
+import atexit
 import io
 import logging
+import queue
 import sys
 from datetime import datetime
-from logging.handlers import TimedRotatingFileHandler
+from logging.handlers import QueueHandler, QueueListener, TimedRotatingFileHandler
 
 _RESET = "\033[0m"
 _DIM = "\033[2m"
@@ -14,6 +16,23 @@ _LEVEL_COLORS = {
     logging.ERROR: "\033[31m",
     logging.CRITICAL: "\033[1;37;41m",
 }
+
+# 异步日志监听器（仅在 setup_logging() 后存在）
+_listener: QueueListener | None = None
+
+
+def stop_logging() -> None:
+    """停止异步日志线程并刷出剩余日志（退出前调用）."""
+    global _listener
+    listener, _listener = _listener, None
+    if listener is not None:
+        try:
+            listener.stop()
+        except Exception:
+            pass
+
+
+atexit.register(stop_logging)
 
 
 def _shorten_name(name: str, max_length: int = 25) -> str:
@@ -117,21 +136,40 @@ def _resolve_log_dir():
         return None
 
 
+# 复用同一个 stdout/stderr 包装对象：TextIOWrapper 被回收时会关闭底层 buffer，
+# 若 setup_logging() 被重复调用而每次都新建包装，旧对象释放后会连带关闭真正的
+# stderr，导致后续日志全部丢失。
+_console_stream = None
+
+
 def _make_console_handler():
     """创建控制台处理器；windowed 模式下 sys.stderr 为 None 时返回 None."""
+    global _console_stream
+
     stream = sys.stderr
     if stream is None:
         # PyInstaller windowed（无控制台）模式下没有 stderr，不添加控制台处理器
         return None
 
     # 用 UTF-8 + replace 包装，避免中文/emoji 在 cp936 控制台上抛 UnicodeEncodeError
+    base = getattr(stream, "buffer", None)
     try:
-        if hasattr(stream, "buffer"):
-            stream = io.TextIOWrapper(stream.buffer, encoding="utf-8", errors="replace")
+        if (
+            base is not None
+            and (
+                _console_stream is None
+                or getattr(_console_stream, "buffer", None) is not base
+            )
+        ):
+            _console_stream = io.TextIOWrapper(
+                base, encoding="utf-8", errors="replace"
+            )
+        elif base is None:
+            _console_stream = stream
     except Exception:
-        pass
+        _console_stream = stream
 
-    return logging.StreamHandler(stream)
+    return logging.StreamHandler(_console_stream or stream)
 
 
 def setup_logging():
@@ -148,6 +186,9 @@ def setup_logging():
         # 配置损坏时不应阻塞日志初始化，退回默认目录
         pass
 
+    # 重复调用时先停掉旧的后台写入线程
+    stop_logging()
+
     # 创建根日志记录器
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)  # 设置根日志级别
@@ -156,6 +197,8 @@ def setup_logging():
     if root_logger.handlers:
         root_logger.handlers.clear()
 
+    handlers = []
+
     # 控制台处理器（windowed 模式下可能为 None）
     console_handler = _make_console_handler()
     if console_handler is not None:
@@ -163,7 +206,7 @@ def setup_logging():
         console_handler.setFormatter(
             _ProjectFormatter(use_colors=_supports_color(console_handler.stream))
         )
-        root_logger.addHandler(console_handler)
+        handlers.append(console_handler)
 
     # 文件处理器：目录不可写时降级为仅控制台日志，不阻塞程序启动
     log_file = None
@@ -181,7 +224,7 @@ def setup_logging():
             file_handler.setLevel(logging.INFO)
             file_handler.suffix = "%Y-%m-%d.log"  # 日志文件后缀格式
             file_handler.setFormatter(_ProjectFormatter(use_colors=False))
-            root_logger.addHandler(file_handler)
+            handlers.append(file_handler)
         except Exception as e:
             # 文件日志初始化失败不应导致程序崩溃（此时控制台日志仍可用）
             log_file = None
@@ -190,6 +233,19 @@ def setup_logging():
                     sys.stderr.write(f"文件日志初始化失败，仅使用控制台日志: {e}\n")
                 except Exception:
                     pass
+
+    # 异步落盘：把控制台/文件 IO 从事件循环和音频线程移到单独线程。
+    # 高频日志（对话消息、状态同步）不再在调用线程里同步 flush。
+    global _listener
+    if handlers:
+        log_queue = queue.Queue(-1)
+        queue_handler = QueueHandler(log_queue)
+        root_logger.addHandler(queue_handler)
+        listener = QueueListener(
+            log_queue, *handlers, respect_handler_level=True
+        )
+        listener.start()
+        _listener = listener
 
     # 第三方库日志保持安静，避免刷屏
     for name in (

@@ -73,14 +73,9 @@ class CalendarEvent:
         return event
 
     def _calculate_reminder_time(self) -> str:
-        """
-        计算提醒时间.
-        """
-        try:
-            from datetime import timedelta
+        """提醒时间：固定在日程开始时刻（到点提醒）。
 
-            start_dt = datetime.fromisoformat(self.start_time)
-            reminder_dt = start_dt - timedelta(minutes=self.reminder_minutes)
-            return reminder_dt.isoformat()
-        except Exception:
-            return self.start_time  # 如果计算失败，返回开始时间
+        ``reminder_minutes`` 仅为兼容旧数据/接口保留，不再影响触发时机；
+        提醒服务直接按 ``start_time`` 判断。
+        """
+        return self.start_time

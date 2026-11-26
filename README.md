@@ -10,12 +10,12 @@
     <img src="https://img.shields.io/badge/License-MIT-green.svg?style=flat-square" alt="License: MIT"/>
   </a>
   <img src="https://img.shields.io/badge/Python-3.9%2B-blue?style=flat-square&logo=python" alt="Python 3.9+"/>
-  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square" alt="Platform"/>
+  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-lightgrey?style=flat-square" alt="Platform"/>
   <img src="https://img.shields.io/badge/Status-Active-success?style=flat-square" alt="Status"/>
 </p>
 
 <p align="center">
-  一个更贴合桌面使用习惯的小智语音客户端 ✨<br/>
+  一个更贴合windows桌面使用习惯的小智语音客户端 ✨<br/>
   悬浮胶囊 · 音乐播放 · 歌词显示 · TTS 与音乐共存 · 文件中转站
 </p>
 
@@ -68,10 +68,10 @@
 - 文本输入更轻便，不打扰：输入框显示在屏幕正上方，通过点击处于“白条”状态触发或者快捷键触发
 
 
-### 3️⃣ 本地音乐及音乐播放优化
-- 添加本地音乐播放，可以播放选择的音乐文件内音乐，
--  TTS 播报时不再粗暴中断本地音乐播放，
--  对话时使用 ducking 方式降低本地音乐播放的音量，TTS 结束后恢复本地音乐播放的音量，
+### 3️⃣ 本地音乐及在线音乐播放优化
+- 添加本地音乐播放选择，可以播放选择的音乐文件内音乐，
+-  TTS 播报时不再粗暴中断本地音乐播放，会降低音乐播放声音，让位给tts语言播报，
+-  对话时使用 ducking 方式降低本地音乐播放的音量，TTS 结束后恢复本地音乐播放的音量。
 
 
 ### 4️⃣ 文件中转站
@@ -122,7 +122,7 @@
 | :--- | :--- |
 | <a href="https://www.python.org/downloads/windows/">Python</a> | 3.9+ |
 | <a href="https://ffmpeg.org/download.html">ffmpeg</a> |9.0.2（推荐版本）|
-| <a href="ms-settings:about" data-linktype="external">系统</a> | Windows 10+ / macOS 10.15+ / Linux |
+| <a href="ms-settings:about" data-linktype="external">系统</a> | Windows 10+ / Linux |
 
 > ⚠️本项目使用<a href="https://ffmpeg.org/download.html">ffmpeg</a>进行音乐编码，建议下载<a href="https://ffmpeg.org/download.html">ffmpeg</a>开发效果更完整
 #### 创建虚拟环境

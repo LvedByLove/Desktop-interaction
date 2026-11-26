@@ -1,6 +1,7 @@
 import asyncio
 import gc
 import threading
+import time
 from collections import deque
 from typing import Callable, List, Optional, Protocol
 
@@ -19,19 +20,88 @@ from src.constants.constants import AudioConfig
 from src.utils.audio_utils import (
     downmix_to_mono,
     get_windows_default_output_name,
-    safe_queue_put,
     select_audio_device,
-    upmix_mono_to_channels,
 )
 from src.utils.config_manager import ConfigManager
 from src.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
 
+# 每个输出通道最多缓存约 10 秒音频（20ms/帧 × 500 帧）。
+_MAX_OUTPUT_FRAMES = 500
+# 音频回调状态异常的最小告警间隔（秒）：避免 xrun 时每帧同步写日志。
+_STREAM_STATUS_LOG_INTERVAL = 5.0
+
+
+class _SampleBuffer:
+    """实时重采样缓冲：按 ndarray 块累积，避免逐样本 popleft。
+
+    PortAudio 回调线程写入/取帧，主线程可能 clear()，因此用锁保护。
+    取帧只做块级切片/一次 concatenate，绝不对样本数做 Python 循环。
+    """
+
+    __slots__ = ("_blocks", "_size", "_lock")
+
+    def __init__(self):
+        self._blocks: deque = deque()
+        self._size = 0
+        self._lock = threading.Lock()
+
+    def __len__(self) -> int:
+        return self._size
+
+    def __bool__(self) -> bool:
+        return self._size > 0
+
+    def extend(self, samples) -> None:
+        if samples is None:
+            return
+        arr = np.asarray(samples, dtype=np.float32)
+        n = len(arr)
+        if n == 0:
+            return
+        with self._lock:
+            self._blocks.append(arr)
+            self._size += n
+
+    def clear(self) -> int:
+        with self._lock:
+            count = self._size
+            self._blocks.clear()
+            self._size = 0
+            return count
+
+    def take(self, n: int):
+        """取出恰好 n 个样本；数据不足时返回 None。"""
+        if n <= 0:
+            return np.empty(0, dtype=np.float32)
+        with self._lock:
+            if self._size < n:
+                return None
+            parts = []
+            need = n
+            while need > 0:
+                block = self._blocks[0]
+                if len(block) <= need:
+                    parts.append(block)
+                    self._blocks.popleft()
+                    need -= len(block)
+                else:
+                    parts.append(block[:need])
+                    self._blocks[0] = block[need:]
+                    need = 0
+            self._size -= n
+        if len(parts) == 1:
+            return parts[0]
+        return np.concatenate(parts)
+
 
 class AudioListener(Protocol):
     """
     音频监听器协议（用于唤醒词检测等）
+
+    注意：``audio_data`` 是回调线程复用的缓冲区视图，监听器如需保留
+    必须自行 ``copy()``，不得原地修改。
     """
 
     def on_audio_data(self, audio_data: np.ndarray) -> None:
@@ -86,11 +156,25 @@ class AudioCodec:
         self.input_resampler = None
         self._output_resamplers = {channel: None for channel in OUTPUT_CHANNELS}
 
-        # 重采样缓冲区
-        self._resample_input_buffer = deque()
+        # 重采样缓冲区（按块累积，避免实时线程逐样本 popleft）
+        self._resample_input_buffer = _SampleBuffer()
         self._resample_output_buffers = {
-            channel: deque() for channel in OUTPUT_CHANNELS
+            channel: _SampleBuffer() for channel in OUTPUT_CHANNELS
         }
+
+        # 输出混音/重采样 scratch（仅在输出回调线程使用，回调内复用）
+        self._render_scratch = {
+            channel: np.zeros(0, dtype=np.float32) for channel in OUTPUT_CHANNELS
+        }
+        self._resample_input_scratch = {
+            channel: np.zeros(0, dtype=np.float32) for channel in OUTPUT_CHANNELS
+        }
+        self._mix_scratch = np.zeros(0, dtype=np.float32)
+        self._music_mix_scratch = np.zeros(0, dtype=np.float32)
+        # 输入回调转 int16 的复用缓冲（回调线程专用）
+        self._input_int16_scratch = np.zeros(
+            AudioConfig.INPUT_FRAME_SIZE, dtype=np.int16
+        )
 
         # 转换标记
         self._need_input_downmix = False
@@ -104,10 +188,13 @@ class AudioCodec:
         self.input_stream = None
         self.output_stream = None
 
-        # 播放队列
-        self._output_buffers = {
-            channel: asyncio.Queue(maxsize=500) for channel in OUTPUT_CHANNELS
-        }
+        # 播放队列：PortAudio 回调线程消费、事件循环线程生产。
+        # 用 deque 而不是 asyncio.Queue：deque 的 append/popleft 是线程安全的，
+        # 且不会像 asyncio.Queue 那样在跨线程 get_nowait 时操作 loop Future。
+        self._output_buffers = {channel: deque() for channel in OUTPUT_CHANNELS}
+        self._last_status_log_at = 0.0
+        self._output_drop_count = 0
+        self._output_drop_log_at = 0.0
 
         # 通道音量和音乐 ducking
         self._channel_volumes = {
@@ -220,7 +307,8 @@ class AudioCodec:
             self.output_channels = audio_config.get("output_channels", 1)
         else:
             self.speaker_device_id = None
-            default_info = self._resolve_default_output()
+            # 设备枚举是同步 PortAudio 调用，放线程里避免阻塞事件循环
+            default_info = await asyncio.to_thread(self._resolve_default_output)
             if default_info:
                 _, self.device_output_sample_rate, self.output_channels = default_info
             else:
@@ -520,21 +608,25 @@ class AudioCodec:
         """
         自动检测并选择最佳设备.
         """
-        # 输入设备：智能选择
-        in_info = select_audio_device("input", include_virtual=False)
+        # 输入设备：智能选择（PortAudio 枚举放线程，避免启动卡事件循环）
+        in_info = await asyncio.to_thread(
+            select_audio_device, "input", include_virtual=False
+        )
         if not in_info:
             raise RuntimeError("无法找到可用的音频输入设备")
 
         # 输出设备：跟随系统默认（插入耳机后由系统自动切换路由），解析默认输出能力
         self.speaker_device_id = None
-        default_output = self._resolve_default_output()
+        default_output = await asyncio.to_thread(self._resolve_default_output)
         if not default_output:
             raise RuntimeError("无法找到可用的音频输出设备")
         _, self.device_output_sample_rate, self.output_channels = default_output
 
         # 获取默认输出设备名称（用于 UI 显示与日志）
         try:
-            default_output_name = sd.query_devices(kind="output").get("name")
+            default_output_name = await asyncio.to_thread(
+                lambda: sd.query_devices(kind="output").get("name")
+            )
         except Exception:
             default_output_name = None
 
@@ -674,7 +766,10 @@ class AudioCodec:
 
             self.output_stream.start()
 
-            self._bound_output_name = self._get_live_default_output_name()
+            # 设备名探测走 COM，放到线程里，避免阻塞事件循环
+            self._bound_output_name = await asyncio.to_thread(
+                self._get_live_default_output_name
+            )
 
             logger.info(
                 f"输出流已启动 | 输出: {self.device_output_sample_rate}Hz {self.output_channels}ch"
@@ -689,8 +784,8 @@ class AudioCodec:
         """
         输入回调：设备原生格式 → 服务端协议格式 转换流程：多声道/高采样率 → 下混+重采样 → 16kHz单声道 → Opus编码.
         """
-        if status and "overflow" not in str(status).lower():
-            logger.warning(f"输入流状态: {status}")
+        if status:
+            self._log_stream_status(status, "输入")
 
         if self._is_closing:
             return
@@ -701,7 +796,8 @@ class AudioCodec:
                 # indata shape: (frames, channels)
                 audio_data = downmix_to_mono(indata, keepdims=False)
             else:
-                audio_data = indata.flatten()  # 已经是单声道
+                # 单声道：取列视图，避免 flatten() 的整帧复制
+                audio_data = indata[:, 0] if indata.ndim > 1 else indata
 
             # 步骤2: 采样率转换（设备采样率 → 16kHz）
             if self.input_resampler is not None:
@@ -713,8 +809,13 @@ class AudioCodec:
             if len(audio_data) != AudioConfig.INPUT_FRAME_SIZE:
                 return
 
-            # 步骤4: 转换为 int16 供 Opus 编码和 AEC 处理
-            audio_data_int16 = (audio_data * 32768.0).astype(np.int16)
+            # 步骤4: 转换为 int16 供 Opus 编码和 AEC 处理（复用 scratch，避免分配）
+            int16_scratch = self._input_int16_scratch
+            if len(int16_scratch) != len(audio_data):
+                int16_scratch = np.empty(len(audio_data), dtype=np.int16)
+                self._input_int16_scratch = int16_scratch
+            np.multiply(audio_data, 32768.0, out=int16_scratch, casting="unsafe")
+            audio_data_int16 = int16_scratch
 
             # 步骤5: AEC处理（如果启用）
             if self._aec_enabled and self.audio_processor._is_macos:
@@ -736,11 +837,13 @@ class AudioCodec:
                     logger.warning(f"实时录音编码失败: {e}")
 
             # 步骤7: 通知音频监听器（解耦唤醒词检测）
+            # 传入复用缓冲的视图；需要保留数据的监听器（如唤醒词）自行在
+            # 入队时 copy 一次，避免这里每帧再复制一份。
             with self._listeners_lock:
                 listeners = tuple(self._audio_listeners)
             for listener in listeners:
                 try:
-                    listener.on_audio_data(audio_data_int16.copy())
+                    listener.on_audio_data(audio_data_int16)
                 except Exception as e:
                     logger.warning(f"音频监听器处理失败: {e}")
 
@@ -755,19 +858,7 @@ class AudioCodec:
             resampled_data = self.input_resampler.resample_chunk(audio_data, last=False)
             if len(resampled_data) > 0:
                 self._resample_input_buffer.extend(resampled_data)
-
-            # 累积到目标帧大小
-            expected_frame_size = AudioConfig.INPUT_FRAME_SIZE
-            if len(self._resample_input_buffer) < expected_frame_size:
-                return None
-
-            # 取出一帧
-            frame_data = []
-            for _ in range(expected_frame_size):
-                frame_data.append(self._resample_input_buffer.popleft())
-
-            return np.array(frame_data, dtype=np.float32)
-
+            return self._resample_input_buffer.take(AudioConfig.INPUT_FRAME_SIZE)
         except Exception as e:
             logger.error(f"输入重采样失败: {e}")
             return None
@@ -777,8 +868,7 @@ class AudioCodec:
         输出回调：服务端协议格式 → 设备原生格式 转换流程：24kHz单声道 → 重采样+上混 → 多声道/高采样率.
         """
         if status:
-            if "underflow" not in str(status).lower():
-                logger.warning(f"输出流状态: {status}")
+            self._log_stream_status(status, "输出")
 
         # 关闭流程中直接回填静音并返回，避免在 stop/close 与置空输出流、清理
         # 重采样器之间存在 TOCTOU 竞态窗口：PortAudio 可能在流停止后仍触发一次
@@ -800,6 +890,46 @@ class AudioCodec:
     def _has_output_resampler(self) -> bool:
         return any(resampler is not None for resampler in self._output_resamplers.values())
 
+    def _log_stream_status(self, status, kind: str) -> None:
+        """回调线程状态异常限流：最多每 5 秒写一次日志，避免 xrun 时刷盘."""
+        now = time.monotonic()
+        if now - self._last_status_log_at < _STREAM_STATUS_LOG_INTERVAL:
+            return
+        self._last_status_log_at = now
+        logger.warning("%s流状态异常: %s", kind, status)
+
+    def _note_output_drop(self, channel: str) -> None:
+        """输出队列拥塞丢帧计数（限流日志）."""
+        self._output_drop_count += 1
+        now = time.monotonic()
+        if now - self._output_drop_log_at < _STREAM_STATUS_LOG_INTERVAL:
+            return
+        self._output_drop_log_at = now
+        logger.warning(
+            "%s 输出队列拥塞，近 5 秒丢弃 %s 帧音频",
+            channel,
+            self._output_drop_count,
+        )
+        self._output_drop_count = 0
+
+    def _enqueue_output(
+        self, channel: str, samples: np.ndarray, *, replace_oldest: bool
+    ) -> bool:
+        """线程安全入队：满时按策略丢最旧或拒绝新帧，不再阻塞事件循环."""
+        buffer = self._output_buffers[channel]
+        full = len(buffer) >= _MAX_OUTPUT_FRAMES
+        if full:
+            if not replace_oldest:
+                self._note_output_drop(channel)
+                return False
+            try:
+                buffer.popleft()
+            except IndexError:
+                pass
+            self._note_output_drop(channel)
+        buffer.append(samples)
+        return True
+
     def _output_callback_direct(self, outdata, frames):
         """直接播放（设备支持协议输出采样率时）"""
         mono_data = self._mix_output_channels(frames, resampled=False)
@@ -810,50 +940,78 @@ class AudioCodec:
         mono_data = self._mix_output_channels(frames, resampled=True)
         self._write_mono_to_outdata(outdata, mono_data)
 
+    def _render_scratch_for(self, channel: str, frames: int) -> np.ndarray:
+        """返回该通道至少 frames 长的 float32 scratch（输出回调线程专用）."""
+        scratch = self._render_scratch[channel]
+        if len(scratch) < frames:
+            scratch = np.zeros(frames, dtype=np.float32)
+            self._render_scratch[channel] = scratch
+        return scratch
+
+    def _ensure_scratch(self, attr: str, frames: int) -> np.ndarray:
+        scratch = getattr(self, attr)
+        if len(scratch) < frames:
+            scratch = np.zeros(frames, dtype=np.float32)
+            setattr(self, attr, scratch)
+        return scratch
+
     def _render_channel_direct(self, channel: str, frames: int) -> np.ndarray:
-        queue = self._output_buffers[channel]
+        scratch = self._render_scratch_for(channel, frames)
         try:
-            audio_data = queue.get_nowait()
-        except asyncio.QueueEmpty:
-            return np.zeros(frames, dtype=np.float32)
+            audio_data = self._output_buffers[channel].popleft()
+        except IndexError:
+            audio_data = None
 
-        if len(audio_data) >= frames:
-            mono_samples = audio_data[:frames]
-        else:
-            mono_samples = np.zeros(frames, dtype=np.int16)
-            mono_samples[: len(audio_data)] = audio_data
+        if audio_data is None or len(audio_data) == 0:
+            scratch[:frames].fill(0.0)
+            return scratch[:frames]
 
-        return mono_samples.astype(np.float32) / 32768.0
+        n = min(len(audio_data), frames)
+        np.copyto(scratch[:n], audio_data[:n], casting="unsafe")
+        np.multiply(scratch[:n], 1.0 / 32768.0, out=scratch[:n])
+        if n < frames:
+            scratch[n:frames].fill(0.0)
+        return scratch[:frames]
 
     def _render_channel_resampled(self, channel: str, frames: int) -> np.ndarray:
         resampler = self._output_resamplers.get(channel)
         if resampler is None:
             return self._render_channel_direct(channel, frames)
 
-        queue = self._output_buffers[channel]
         buffer = self._resample_output_buffers[channel]
+        source_queue = self._output_buffers[channel]
+        input_scratch = self._resample_input_scratch[channel]
 
         while len(buffer) < frames:
             try:
-                audio_data = queue.get_nowait()
-            except asyncio.QueueEmpty:
+                audio_data = source_queue.popleft()
+            except IndexError:
                 break
 
-            audio_data_float = audio_data.astype(np.float32) / 32768.0
-            resampled_data = resampler.resample_chunk(audio_data_float, last=False)
+            n = len(audio_data)
+            if n == 0:
+                continue
+            if len(input_scratch) < n:
+                input_scratch = np.zeros(n, dtype=np.float32)
+                self._resample_input_scratch[channel] = input_scratch
+            np.copyto(input_scratch[:n], audio_data, casting="unsafe")
+            np.multiply(input_scratch[:n], 1.0 / 32768.0, out=input_scratch[:n])
+            resampled_data = resampler.resample_chunk(input_scratch[:n], last=False)
             if len(resampled_data) > 0:
                 buffer.extend(resampled_data)
 
-        if len(buffer) >= frames:
-            frame_data = [buffer.popleft() for _ in range(frames)]
-            return np.array(frame_data, dtype=np.float32)
+        data = buffer.take(frames)
+        if data is not None:
+            return data
 
-        mono_data = np.zeros(frames, dtype=np.float32)
-        if buffer:
-            available = min(len(buffer), frames)
-            for index in range(available):
-                mono_data[index] = buffer.popleft()
-        return mono_data
+        scratch = self._render_scratch_for(channel, frames)
+        available = len(buffer)
+        if available > 0:
+            tail = buffer.take(available)
+            if tail is not None:
+                np.copyto(scratch[:available], tail, casting="unsafe")
+        scratch[available:frames].fill(0.0)
+        return scratch[:frames]
 
     def _mix_output_channels(self, frames: int, resampled: bool) -> np.ndarray:
         render = self._render_channel_resampled if resampled else self._render_channel_direct
@@ -864,9 +1022,13 @@ class AudioCodec:
         music_volume = self._channel_volumes[OUTPUT_CHANNEL_MUSIC]
         music_gain = self._update_music_duck_gain()
 
-        mixed = (tts_data * tts_volume) + (music_data * music_volume * music_gain)
-        np.clip(mixed, -1.0, 1.0, out=mixed)
-        return mixed.astype(np.float32, copy=False)
+        mixed = self._ensure_scratch("_mix_scratch", frames)
+        music_scaled = self._ensure_scratch("_music_mix_scratch", frames)
+        np.multiply(tts_data, tts_volume, out=mixed[:frames])
+        np.multiply(music_data, music_volume * music_gain, out=music_scaled[:frames])
+        np.add(mixed[:frames], music_scaled[:frames], out=mixed[:frames])
+        np.clip(mixed[:frames], -1.0, 1.0, out=mixed[:frames])
+        return mixed[:frames]
 
     def _update_music_duck_gain(self) -> float:
         target = self._music_gain_target
@@ -879,7 +1041,8 @@ class AudioCodec:
 
     def _write_mono_to_outdata(self, outdata, mono_data: np.ndarray):
         if self._need_output_upmix:
-            outdata[:] = upmix_mono_to_channels(mono_data, self.output_channels)
+            # 广播写入，避免 np.tile 每帧生成整块多声道临时数组
+            outdata[:] = mono_data[:, None]
         else:
             outdata[:, 0] = mono_data
 
@@ -957,8 +1120,7 @@ class AudioCodec:
 
     def has_pending_audio(self, channel: str = OUTPUT_CHANNEL_TTS) -> bool:
         """该输出通道是否还有未播完的数据（含重采样缓冲）."""
-        queue = self._output_buffers.get(channel)
-        if queue is not None and not queue.empty():
+        if self._output_buffers.get(channel):
             return True
         buffer = self._resample_output_buffers.get(channel)
         return bool(buffer)
@@ -1000,11 +1162,8 @@ class AudioCodec:
                 )
                 return
 
-            # 放入指定逻辑通道（使用工具函数安全入队）
-            if not safe_queue_put(
-                self._output_buffers[channel], audio_array, replace_oldest=True
-            ):
-                logger.warning(f"{channel} 播放队列已满，丢弃音频帧")
+            # 放入指定逻辑通道；满时丢最旧帧，保持低延迟
+            self._enqueue_output(channel, audio_array, replace_oldest=True)
 
         except opuslib.OpusError as e:
             logger.warning(f"Opus解码失败，丢弃此帧: {e}")
@@ -1033,28 +1192,28 @@ class AudioCodec:
             if len(pcm_data) != expected_length:
                 if len(pcm_data) < expected_length:
                     # 填充静音
+                    original_len = len(pcm_data)
                     padded = np.zeros(expected_length, dtype=np.int16)
-                    padded[: len(pcm_data)] = pcm_data
+                    padded[:original_len] = pcm_data
                     pcm_data = padded
                     logger.debug(
-                        f"PCM 数据不足，填充静音: {len(pcm_data)} → {expected_length}"
+                        "PCM 数据不足，填充静音: %s → %s",
+                        original_len,
+                        expected_length,
                     )
                 else:
                     # 截断多余数据
+                    original_len = len(pcm_data)
                     pcm_data = pcm_data[:expected_length]
                     logger.debug(
-                        f"PCM 数据过长，截断: {len(pcm_data)} → {expected_length}"
+                        "PCM 数据过长，截断: %s → %s",
+                        original_len,
+                        expected_length,
                     )
 
-            queue = self._output_buffers[channel]
+            # 满时丢弃新帧（不回压、不阻塞事件循环）；解码端已按实时速率限速
+            self._enqueue_output(channel, pcm_data, replace_oldest=False)
 
-            # 放入播放队列（不替换旧数据，阻塞等待）
-            if not safe_queue_put(queue, pcm_data, replace_oldest=False):
-                # 队列满时阻塞等待
-                await asyncio.wait_for(queue.put(pcm_data), timeout=2.0)
-
-        except asyncio.TimeoutError:
-            logger.warning("播放队列阻塞超时，丢弃 PCM 帧")
         except Exception as e:
             logger.warning(f"写入 PCM 数据失败: {e}")
 
@@ -1111,7 +1270,9 @@ class AudioCodec:
                     latency="low",
                 )
                 self.output_stream.start()
-                self._bound_output_name = self._get_live_default_output_name()
+                self._bound_output_name = await asyncio.to_thread(
+                    self._get_live_default_output_name
+                )
                 logger.info("输出流重新初始化成功")
                 return None
         except Exception as e:
@@ -1206,7 +1367,7 @@ class AudioCodec:
         （等价于音频层"重启"，已被验证有效），再用 device=None 重新打开，使输出
         真正跟随新的系统默认设备。
         """
-        new_name = self._get_live_default_output_name()
+        new_name = await asyncio.to_thread(self._get_live_default_output_name)
 
         # 记录输入流在重建前是否处于运行状态，避免待命下热插拔重新打开麦克风
         input_was_running = self.input_stream is not None and getattr(
@@ -1225,10 +1386,13 @@ class AudioCodec:
                     logger.warning(f"关闭{attr}失败: {e}")
                 setattr(self, attr, None)
 
-        # 2. 重新初始化 PortAudio，刷新设备列表与默认设备
-        try:
+        # 2. 重新初始化 PortAudio，刷新设备列表与默认设备（放线程，避免卡事件循环）
+        def _reinit_portaudio():
             sd._terminate()
             sd._initialize()
+
+        try:
+            await asyncio.to_thread(_reinit_portaudio)
         except Exception as e:
             logger.warning(f"重新初始化 PortAudio 失败: {e}")
 
@@ -1237,7 +1401,7 @@ class AudioCodec:
 
         # 4. 重新解析默认输出（此时已实时）
         self.speaker_device_id = None
-        default_info = self._resolve_default_output()
+        default_info = await asyncio.to_thread(self._resolve_default_output)
         if default_info:
             _, self.device_output_sample_rate, self.output_channels = default_info
         else:
@@ -1314,20 +1478,24 @@ class AudioCodec:
         """
         while not self._is_closing:
             try:
-                current = self._get_live_default_output_name()
+                # COM 探测放线程；间隔放宽到 3 秒，减少常驻 CPU/主循环抖动
+                current = await asyncio.to_thread(
+                    self._get_live_default_output_name
+                )
                 if (
                     current is not None
                     and self._bound_output_name is not None
                     and current != self._bound_output_name
                 ):
                     logger.info(
-                        f"检测到系统默认输出设备变化: "
-                        f"{self._bound_output_name!r} -> {current!r}"
+                        "检测到系统默认输出设备变化: %r -> %r",
+                        self._bound_output_name,
+                        current,
                     )
                     await self._follow_default_output()
             except Exception as e:
                 logger.warning(f"监控输出设备变化失败: {e}")
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(3.0)
 
     async def clear_audio_queue(self, channel: str | None = None):
         """清空音频队列.
@@ -1342,22 +1510,14 @@ class AudioCodec:
 
         for output_channel in channels:
             queue = self._output_buffers[output_channel]
-            while not queue.empty():
-                try:
-                    queue.get_nowait()
-                    cleared_count += 1
-                except asyncio.QueueEmpty:
-                    break
+            cleared_count += len(queue)
+            queue.clear()
 
-            resample_buffer = self._resample_output_buffers[output_channel]
-            if resample_buffer:
-                cleared_count += len(resample_buffer)
-                resample_buffer.clear()
+            cleared_count += self._resample_output_buffers[output_channel].clear()
 
         # 全量清空时保留旧行为：同时清理输入重采样缓存
-        if channel is None and self._resample_input_buffer:
-            cleared_count += len(self._resample_input_buffer)
-            self._resample_input_buffer.clear()
+        if channel is None:
+            cleared_count += self._resample_input_buffer.clear()
 
         if cleared_count > 0:
             target = "全部" if channel is None else channel

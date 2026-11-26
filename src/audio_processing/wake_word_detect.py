@@ -1,11 +1,11 @@
 import asyncio
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable, Optional
 
 import numpy as np
-import sherpa_onnx
 
 from src.constants.constants import AudioConfig
 from src.utils.config_manager import ConfigManager
@@ -36,6 +36,13 @@ class WakeWordDetector:
 
         # 音频数据队列（在 start() 中创建，确保绑定当前事件循环）
         self._audio_queue: Optional[asyncio.Queue] = None
+        # 回调线程 → 事件循环的桥接：入队走 call_soon_threadsafe，
+        # 检测循环用 await queue.get() 阻塞等待，不再 5ms 空转轮询。
+        self._loop: asyncio.AbstractEventLoop | None = None
+        # ONNX 推理放在单线程 executor，避免阻塞事件循环且保持帧顺序。
+        self._executor: Optional[ThreadPoolExecutor] = None
+        # paused/muted 时让检测循环挂起等待，不消耗 CPU。
+        self._run_event: Optional[asyncio.Event] = None
 
         # 防重复触发机制
         self.last_detection_time = 0
@@ -82,7 +89,7 @@ class WakeWordDetector:
 
         # KWS参数配置 - 优化速度
         self.num_threads = config.get_config(
-            "WAKE_WORD_OPTIONS.NUM_THREADS", 4
+            "WAKE_WORD_OPTIONS.NUM_THREADS", 2
         )  # 增加线程数
         self.provider = config.get_config("WAKE_WORD_OPTIONS.PROVIDER", "cpu")
         self.max_active_paths = config.get_config(
@@ -107,6 +114,9 @@ class WakeWordDetector:
         初始化Sherpa-ONNX KeywordSpotter模型.
         """
         try:
+            # 延迟导入：sherpa_onnx 是大型原生扩展，默认关闭唤醒词时无需加载。
+            import sherpa_onnx
+
             # 检查模型文件
             encoder_path = self.model_dir / "encoder.onnx"
             decoder_path = self.model_dir / "decoder.onnx"
@@ -168,37 +178,58 @@ class WakeWordDetector:
         """
         self.on_detected_callback = callback
 
+    def _update_run_event(self) -> None:
+        """根据 paused/muted 更新检测循环的等待事件."""
+        event = self._run_event
+        if event is None:
+            return
+        if self.paused or self.muted:
+            event.clear()
+        else:
+            event.set()
+
     def set_muted(self, muted: bool) -> None:
         """对话期间临时静音检测（麦克风采集仍在继续）."""
         self.muted = bool(muted)
-        if self.muted:
-            # 丢弃静音前积压的音频
-            queue = self._audio_queue
-            if queue is not None:
-                while True:
-                    try:
-                        queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        break
+        # 静音/恢复时都丢弃积压帧：避免恢复后先喂入对话期间的 TTS 回声。
+        queue = self._audio_queue
+        if queue is not None:
+            while True:
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+        self._update_run_event()
+
+    def _enqueue_audio(self, audio_data: np.ndarray) -> None:
+        """事件循环线程：把回调线程送来的音频放入队列（满时丢最旧）."""
+        queue = self._audio_queue
+        if queue is None or self._stopping:
+            return
+        try:
+            queue.put_nowait(audio_data)
+        except asyncio.QueueFull:
+            try:
+                queue.get_nowait()
+                queue.put_nowait(audio_data)
+            except (asyncio.QueueEmpty, asyncio.QueueFull):
+                pass
 
     def on_audio_data(self, audio_data: np.ndarray):
+        """PortAudio 回调线程：只做一次 copy + 线程安全调度，不碰 asyncio 队列."""
         if not self.enabled or not self.is_running_flag or self.paused or self.muted:
             return
 
-        queue = self._audio_queue
-        if queue is None:
+        loop = self._loop
+        if loop is None or loop.is_closed():
             return
 
         try:
-            # 将音频数据放入队列，由检测循环异步处理
-            queue.put_nowait(audio_data.copy())
-        except asyncio.QueueFull:
-            # 队列满时丢弃最旧数据
-            try:
-                queue.get_nowait()
-                queue.put_nowait(audio_data.copy())
-            except (asyncio.QueueEmpty, asyncio.QueueFull):
-                pass
+            # 缓冲由 AudioCodec 复用，必须 copy 后才能跨线程交给检测循环
+            loop.call_soon_threadsafe(self._enqueue_audio, audio_data.copy())
+        except RuntimeError:
+            # 事件循环已关闭（关闭收尾阶段），直接丢弃
+            pass
         except Exception as e:
             logger.debug(f"音频数据入队失败: {type(e).__name__}: {e}")
 
@@ -221,7 +252,13 @@ class WakeWordDetector:
             self.muted = False
             self._stopping = False
 
-            # 队列创建在事件循环内，避免构造时（可能未绑定循环）遗留问题
+            # 队列/事件/executor 创建在事件循环内，避免构造时未绑定循环
+            self._loop = asyncio.get_running_loop()
+            self._run_event = asyncio.Event()
+            self._update_run_event()
+            self._executor = ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="kws-infer"
+            )
             self._audio_queue = asyncio.Queue(maxsize=100)
 
             # 创建检测流
@@ -232,7 +269,9 @@ class WakeWordDetector:
             self.audio_codec.add_audio_listener(self)
 
             # 启动检测任务
-            self.detection_task = asyncio.create_task(self._detection_loop())
+            self.detection_task = asyncio.create_task(
+                self._detection_loop(), name="wake_word:detect"
+            )
 
             logger.info("Sherpa-ONNX KeywordSpotter检测器启动成功（观察者模式）")
             return True
@@ -264,16 +303,38 @@ class WakeWordDetector:
             while self.is_running_flag and not self._stopping:
                 try:
                     if self.paused or self.muted:
-                        await asyncio.sleep(0.05)
+                        # 暂停/静音期间完全挂起，不再 5ms 空转
+                        event = self._run_event
+                        if event is not None:
+                            await event.wait()
+                        else:
+                            await asyncio.sleep(0.05)
                         continue
 
-                    # 非阻塞取帧后短暂让出事件循环：避免 asyncio.Queue 被
-                    # PortAudio 回调线程唤醒时可能出现的延迟，同时保持低延迟。
-                    result = self._process_audio_sync()
-                    if result:
-                        await self._handle_detection_result(result)
-                    await asyncio.sleep(0.005)
-                    error_count = 0
+                    queue = self._audio_queue
+                    if queue is None:
+                        break
+                    audio_data = await queue.get()
+                    try:
+                        if (
+                            audio_data is _STOP_SENTINEL
+                            or audio_data is None
+                            or self._stopping
+                        ):
+                            break
+                        # ONNX 推理放单线程 executor：不阻塞事件循环，且保持帧顺序
+                        executor = self._executor
+                        if executor is not None:
+                            result = await asyncio.get_running_loop().run_in_executor(
+                                executor, self._process_frame, audio_data
+                            )
+                        else:
+                            result = self._process_frame(audio_data)
+                        if result:
+                            await self._handle_detection_result(result)
+                        error_count = 0
+                    finally:
+                        queue.task_done()
 
                 except asyncio.CancelledError:
                     break
@@ -304,18 +365,9 @@ class WakeWordDetector:
             if self.detection_task is asyncio.current_task():
                 self.detection_task = None
 
-    def _process_audio_sync(self) -> str:
-        """从队列取一帧并送入 KWS，返回检测到的关键词（未检测到返回空串）."""
-        queue = self._audio_queue
-        if queue is None or self._stopping:
-            return ""
-
-        try:
-            audio_data = queue.get_nowait()
-        except asyncio.QueueEmpty:
-            return ""
-
-        if audio_data is _STOP_SENTINEL or audio_data is None or len(audio_data) == 0:
+    def _process_frame(self, audio_data) -> str:
+        """在 executor 线程把一帧送入 KWS，返回检测到的关键词（无则空串）."""
+        if audio_data is None or len(audio_data) == 0 or self._stopping:
             return ""
 
         with self._onnx_lock:
@@ -353,6 +405,7 @@ class WakeWordDetector:
 
         # 短暂暂停检测，避免唤醒流程中的 TTS/回声再次触发
         self.paused = True
+        self._update_run_event()
         try:
             # 触发回调
             if self.on_detected_callback:
@@ -375,6 +428,7 @@ class WakeWordDetector:
                         except asyncio.QueueEmpty:
                             break
             self.paused = False
+            self._update_run_event()
 
     async def stop(self):
         """
@@ -385,6 +439,10 @@ class WakeWordDetector:
 
         self._stopping = True
         self.is_running_flag = False
+        # 若检测循环正挂起在 paused/muted 等待事件，先唤醒它
+        event = self._run_event
+        if event is not None:
+            event.set()
 
         # 先从 AudioCodec 移除监听器，并释放强引用，避免关闭后 codec/soxr 泄漏
         self._detach_audio()
@@ -424,6 +482,14 @@ class WakeWordDetector:
             if self.detection_task is task:
                 self.detection_task = None
             self._audio_queue = None
+            self._loop = None
+            self._run_event = None
+            executor, self._executor = self._executor, None
+            if executor is not None:
+                try:
+                    executor.shutdown(wait=False, cancel_futures=True)
+                except Exception:
+                    pass
             # 注意：不要在这里释放 self.stream。sherpa-onnx 的 KeywordSpotter
             # 在 C++ 层拥有 stream 的所有权，先释放 stream 再释放 spotter 会
             # 导致析构时 double free；检测器对象本身随应用退出一起回收即可。

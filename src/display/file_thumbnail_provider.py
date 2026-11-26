@@ -27,6 +27,7 @@ import stat
 import sys
 import tempfile
 from collections import OrderedDict
+from typing import Optional
 
 from PySide6.QtCore import (
     QFileInfo,
@@ -402,12 +403,20 @@ class _ThumbnailSignals(QObject):
 
 
 class _ThumbnailTask(QRunnable):
-    def __init__(self, path: str, size: int, generation: int, signals: _ThumbnailSignals):
+    def __init__(
+        self,
+        path: str,
+        size: int,
+        generation: int,
+        signals: _ThumbnailSignals,
+        icon_dir: str,
+    ):
         super().__init__()
         self._path = path
         self._size = size
         self._generation = generation
         self._signals = signals
+        self._icon_dir = icon_dir
         self.setAutoDelete(True)
 
     def run(self):
@@ -421,6 +430,27 @@ class _ThumbnailTask(QRunnable):
                 if image is not None:
                     rgba, width, height = image
                     payload.update(rgba=rgba, width=width, height=height)
+                    # PNG 编码/写盘留在工作线程；GUI 线程只做 QImage→QPixmap，
+                    # 避免一次拖入大量文件时主线程被逐个 PNG 压缩卡住。
+                    try:
+                        qimage = QImage(
+                            rgba,
+                            width,
+                            height,
+                            width * 4,
+                            QImage.Format_RGBA8888_Premultiplied,
+                        )
+                        if not qimage.isNull():
+                            os.makedirs(self._icon_dir, exist_ok=True)
+                            name = (
+                                hashlib.md5(self._path.encode("utf-8")).hexdigest()
+                                + ".png"
+                            )
+                            png_path = os.path.join(self._icon_dir, name)
+                            if qimage.save(png_path, "PNG"):
+                                payload["png_path"] = png_path
+                    except Exception:
+                        pass
         except Exception:
             pass
         try:
@@ -477,7 +507,13 @@ class FileIconProvider(QObject):
             return
         self._pending.add(path)
         self._pool.start(
-            _ThumbnailTask(path, self._icon_size, self._generation, self._signals)
+            _ThumbnailTask(
+                path,
+                self._icon_size,
+                self._generation,
+                self._signals,
+                self._icon_dir,
+            )
         )
 
     def _fallback_pixmap(self, path: str) -> QPixmap:
@@ -508,7 +544,17 @@ class FileIconProvider(QObject):
             pass
         return _glyph_pixmap(size, ext, missing=not os.path.exists(path))
 
+    def _trim_caches(self, path: str) -> None:
+        for cache in (self._pixmap_cache, self._url_cache):
+            cache.move_to_end(path)
+            while len(cache) > self._MAX_CACHE:
+                cache.popitem(last=False)
+        # metadata 之前无上限；长时间拖入大量文件会无限增长
+        while len(self._meta_cache) > self._MAX_CACHE:
+            self._meta_cache.pop(next(iter(self._meta_cache)))
+
     def _store(self, path: str, pixmap: QPixmap, meta: str):
+        """回退图标路径：仍需要 GUI 线程落盘（Shell 图标不能跨线程取）。"""
         self._meta_cache[path] = meta
         if pixmap is None or pixmap.isNull():
             self._pixmap_cache[path] = QPixmap()
@@ -525,11 +571,19 @@ class FileIconProvider(QObject):
             except Exception:
                 url = ""
             self._url_cache[path] = url
+        self._trim_caches(path)
 
-        for cache in (self._pixmap_cache, self._url_cache):
-            cache.move_to_end(path)
-            while len(cache) > self._MAX_CACHE:
-                cache.popitem(last=False)
+    def _store_loaded(
+        self, path: str, pixmap: QPixmap, meta: str, png_path: Optional[str]
+    ):
+        """工作线程已完成 PNG 编码：GUI 线程只更新缓存和 URL。"""
+        self._meta_cache[path] = meta
+        self._pixmap_cache[path] = pixmap
+        if png_path and os.path.exists(png_path):
+            self._url_cache[path] = QUrl.fromLocalFile(png_path).toString()
+        else:
+            self._url_cache[path] = ""
+        self._trim_caches(path)
 
     def _on_loaded(self, path: str, payload: object):
         self._pending.discard(path)
@@ -554,10 +608,12 @@ class FileIconProvider(QObject):
                 )
                 if not image.isNull():
                     pixmap = QPixmap.fromImage(image.copy())
+        png_path = payload.get("png_path")
         if pixmap is None or pixmap.isNull():
             pixmap = self._fallback_pixmap(path)
-
-        self._store(path, pixmap, meta)
+            self._store(path, pixmap, meta)
+        else:
+            self._store_loaded(path, pixmap, meta, png_path)
         self.updated.emit(path)
 
     # -- 对外接口（保持旧签名） ---------------------------------------------

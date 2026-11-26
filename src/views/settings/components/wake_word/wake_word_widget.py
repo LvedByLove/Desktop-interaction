@@ -284,7 +284,7 @@ class WakeWordWidget(QWidget):
                 self.num_threads_spin.setValue(
                     int(
                         self.config_manager.get_config(
-                            "WAKE_WORD_OPTIONS.NUM_THREADS", 4
+                            "WAKE_WORD_OPTIONS.NUM_THREADS", 2
                         )
                     )
                 )
@@ -661,7 +661,7 @@ class WakeWordWidget(QWidget):
 
             if self.num_threads_spin is not None:
                 self.num_threads_spin.setValue(
-                    int(wake_word_config.get("NUM_THREADS", 4))
+                    int(wake_word_config.get("NUM_THREADS", 2))
                 )
             if self.keywords_score_slider is not None:
                 score = float(wake_word_config.get("KEYWORDS_SCORE", 1.8))

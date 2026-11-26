@@ -202,9 +202,9 @@ class MusicCacheWidget(QWidget):
             self.music_quality_combo.setCurrentIndex(index if index >= 0 else 0)
 
             try:
-                volume = max(0, min(100, int(music_cfg.get("VOLUME", 50))))
+                volume = max(0, min(100, int(music_cfg.get("VOLUME", 20))))
             except (TypeError, ValueError):
-                volume = 50
+                volume = 20
 
             self.music_volume_slider.blockSignals(True)
             try:

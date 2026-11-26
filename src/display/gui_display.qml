@@ -11,6 +11,10 @@ Rectangle {
     signal sendButtonClicked(string text)
     signal windowResizeRequested(int width, int height)
     signal hiddenModeChanged(bool isHidden)
+    // 右键打开外部播放器控制面板（上一首 / 播放暂停 / 下一首）
+    signal mediaControlRequested()
+    // 日程提醒弹窗被点击：请求提前收起
+    signal reminderDismissRequested()
     // 聆听声纹停留结束、已回到待机短横线
     signal listeningSettled()
 
@@ -29,22 +33,17 @@ Rectangle {
     property int inputHeight: 54
     property int ttsWidth: 320
     property int ttsHeight: 42
+    // 右键歌词胶囊：向下展开为播放控制界面
+    property bool musicPanelOpen: false
+    property int musicPanelWidth: 360
+    property int musicPanelHeight: 196
     property int transcriptWidth: 460
     property int transcriptHeight: 360
 
-    Behavior on width {
-        NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
-    }
-    Behavior on height {
-        NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
-    }
+    // 窗口自身的 width/height/x/y 由 Python 侧 QPropertyAnimation 统一驱动；
+    // 这里不要再挂 Behavior，否则同一段 220ms 动画会在原生窗口和 QML 内容上各跑一遍，
+    // 导致内容持续重排并落后于窗口。radius/color 与窗口几何无关，保留过渡。
     Behavior on radius {
-        NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
-    }
-    Behavior on x {
-        NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
-    }
-    Behavior on y {
         NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
     }
     Behavior on color {
@@ -52,23 +51,30 @@ Rectangle {
         ColorAnimation { duration: 260; easing.type: Easing.InOutCubic }
     }
 
+    function formatTime(value) {
+        if (!isFinite(value) || value < 0)
+            return "--:--"
+        var total = Math.floor(value)
+        return ("0" + Math.floor(total / 60)).slice(-2) + ":" + ("0" + (total % 60)).slice(-2)
+    }
+
     function modeWidth(mode) {
         if (mode === "input") return inputWidth
-        if (mode === "tts") return ttsWidth
+        if (mode === "tts") return musicPanelOpen ? musicPanelWidth : ttsWidth
         if (mode === "transcript") return transcriptWidth
         return hiddenWidth
     }
 
     function modeHeight(mode) {
         if (mode === "input") return inputHeight
-        if (mode === "tts") return ttsHeight
+        if (mode === "tts") return musicPanelOpen ? musicPanelHeight : ttsHeight
         if (mode === "transcript") return transcriptHeight
         return hiddenHeight
     }
 
     function modeRadius(mode) {
         if (mode === "input") return inputHeight / 2
-        if (mode === "tts") return 18
+        if (mode === "tts") return musicPanelOpen ? 20 : 18
         if (mode === "transcript") return 20
         return hiddenHeight / 2
     }
@@ -77,6 +83,11 @@ Rectangle {
         var wasHidden = isHidden
         viewMode = mode
         isHidden = mode === "hidden"
+
+        // 离开歌词态，或普通 TTS 播报抢占胶囊时，收起播放面板。
+        if (mode !== "tts" || (displayModel && !displayModel.musicLyricsActive)) {
+            musicPanelOpen = false
+        }
 
         // 离开待机态时先清掉悬浮高亮：短横线隐藏后 MouseArea 不再收到
         // onExited，否则下次回到待机态会残留"悬浮高亮"。
@@ -106,7 +117,7 @@ Rectangle {
             root.hiddenModeChanged(isHidden)
         }
 
-        if (mode === "tts") {
+        if (mode === "tts" && !musicPanelOpen) {
             restartTtsScroll()
         } else {
             stopTtsScroll()
@@ -241,7 +252,29 @@ Rectangle {
         if (viewMode !== "tts") return
         root.radius = modeRadius(viewMode)
         root.windowResizeRequested(modeWidth(viewMode), modeHeight(viewMode))
-        restartTtsScroll()
+        if (musicPanelOpen)
+            stopTtsScroll()
+        else
+            restartTtsScroll()
+    }
+
+    function openMusicPanel() {
+        if (viewMode !== "tts") return
+        musicPanelOpen = true
+        refreshCurrentModeSize()
+    }
+
+    function closeMusicPanel() {
+        if (!musicPanelOpen) return
+        musicPanelOpen = false
+        refreshCurrentModeSize()
+    }
+
+    function toggleMusicPanel() {
+        if (musicPanelOpen)
+            closeMusicPanel()
+        else
+            openMusicPanel()
     }
 
     function showTranscript() {
@@ -269,7 +302,7 @@ Rectangle {
     Connections {
         target: displayModel
         function onTtsTextChanged() {
-            if (root.viewMode === "tts") {
+            if (root.viewMode === "tts" && !root.musicPanelOpen) {
                 root.restartTtsScroll()
             }
         }
@@ -282,10 +315,16 @@ Rectangle {
             }
         }
         function onMusicLyricsActiveChanged() {
-            root.refreshCurrentModeSize()
+            if (displayModel && !displayModel.musicLyricsActive && root.musicPanelOpen)
+                root.closeMusicPanel()
+            else
+                root.refreshCurrentModeSize()
         }
         function onMusicLyricsCollapsedChanged() {
-            root.refreshCurrentModeSize()
+            if (displayModel && displayModel.musicLyricsCollapsed && root.musicPanelOpen)
+                root.closeMusicPanel()
+            else
+                root.refreshCurrentModeSize()
         }
         function onTtsTranscriptChanged() {
             if (root.viewMode === "transcript") {
@@ -374,7 +413,11 @@ Rectangle {
             onExited: hiddenBarHovered = false
             onClicked: function(mouse) {
                 if (mouse.button === Qt.RightButton) {
-                    root.showTranscript()
+                    // 音乐播放中优先打开播放控制；其它时候仍是对话记录
+                    if (displayModel && displayModel.musicLyricsActive)
+                        root.mediaControlRequested()
+                    else
+                        root.showTranscript()
                 } else {
                     root.exitHiddenMode()
                 }
@@ -471,7 +514,7 @@ Rectangle {
                         // 进入聆听态时每根声纹错峰"弹"起来，避免一排线段同时闪出
                         SequentialAnimation on scale {
                             running: root.viewMode === "listening"
-                            PauseAnimation { duration: index * 28 }
+                            PauseAnimation { duration: Math.max(0, index * 28) }
                             NumberAnimation {
                                 from: 0.25
                                 to: 1.0
@@ -483,7 +526,7 @@ Rectangle {
                         SequentialAnimation on height {
                             loops: Animation.Infinite
                             running: root.viewMode === "listening"
-                            PauseAnimation { duration: (index % 4) * 55 }
+                            PauseAnimation { duration: Math.max(0, (index % 4) * 55) }
                             NumberAnimation {
                                 from: 4 + (index % 2) * 2
                                 to: 9 + (index % 3)
@@ -511,16 +554,19 @@ Rectangle {
         anchors.rightMargin: 16
         anchors.topMargin: 7
         anchors.bottomMargin: 7
-        opacity: viewMode === "tts" ? 1 : 0
-        enabled: viewMode === "tts"
+        // 播放面板展开时，紧凑歌词让位给面板内容
+        readonly property bool compactVisible: viewMode === "tts" && !musicPanelOpen
+        opacity: compactVisible ? 1 : 0
+        enabled: compactVisible
         // 收起时文字/内容向中心缩放淡出，配合窗口几何收缩形成"收回"效果
-        scale: viewMode === "tts" ? 1 : 0.55
+        scale: compactVisible ? 1 : 0.55
         transformOrigin: Item.Center
         Behavior on opacity { NumberAnimation { duration: 240; easing.type: Easing.InOutCubic } }
         Behavior on scale { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
         // 收起时内容向上聚拢，展开时从短横线向下展开
         transform: Translate {
-            y: viewMode === "tts" ? 0 : -10
+            // compactVisible 是 ttsContent 的局部属性，transform 内的对象需用 id 限定
+            y: ttsContent.compactVisible ? 0 : -10
             Behavior on y { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
         }
 
@@ -598,6 +644,298 @@ Rectangle {
         }
     }
 
+    // 歌词态右键：紧凑时向下展开播放面板，展开后再右键收起
+    MouseArea {
+        anchors.fill: parent
+        acceptedButtons: Qt.RightButton
+        enabled: root.viewMode === "tts"
+            && displayModel
+            && displayModel.musicLyricsActive
+        z: 5
+        onClicked: {
+            if (root.musicPanelOpen)
+                root.closeMusicPanel()
+            else
+                root.mediaControlRequested()
+        }
+    }
+
+    // 提醒态点击：点击胶囊立即结束提醒显示（仅日程到点提醒启用）
+    MouseArea {
+        anchors.fill: parent
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        enabled: root.viewMode === "tts"
+            && displayModel
+            && displayModel.reminderDismissible
+            && !displayModel.musicLyricsActive
+        cursorShape: Qt.PointingHandCursor
+        z: 4
+        onClicked: root.reminderDismissRequested()
+    }
+
+    // 音乐播放面板：右键歌词胶囊后向下展开
+    ColumnLayout {
+        id: musicPanelContent
+        anchors.fill: parent
+        anchors.leftMargin: 16
+        anchors.rightMargin: 16
+        anchors.topMargin: 12
+        anchors.bottomMargin: 12
+        spacing: 6
+        visible: opacity > 0
+        opacity: viewMode === "tts" && musicPanelOpen ? 1 : 0
+        enabled: opacity > 0.01
+        scale: opacity > 0.01 ? 1 : 0.94
+        Behavior on opacity { NumberAnimation { duration: 200; easing.type: Easing.InOutCubic } }
+        Behavior on scale { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 8
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 0
+
+                Text {
+                    Layout.fillWidth: true
+                    text: mediaControlModel.sourceLabel
+                    visible: text.length > 0
+                    color: "#9aa1aa"
+                    font.family: "Microsoft YaHei UI"
+                    font.pixelSize: 10
+                    elide: Text.ElideRight
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: mediaControlModel.title.length > 0
+                          ? mediaControlModel.title
+                          : "没有正在播放的音乐"
+                    color: "white"
+                    font.family: "Microsoft YaHei UI"
+                    font.pixelSize: 15
+                    font.weight: Font.DemiBold
+                    elide: Text.ElideRight
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: mediaControlModel.artist
+                    visible: text.length > 0
+                    color: "#9aa1aa"
+                    font.family: "Microsoft YaHei UI"
+                    font.pixelSize: 11
+                    elide: Text.ElideRight
+                }
+            }
+        }
+
+        // 歌词区：当前歌词移动到播放面板这里显示
+        Item {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            clip: true
+
+            Text {
+                anchors.fill: parent
+                text: displayModel ? displayModel.ttsText : ""
+                color: "white"
+                font.family: "Microsoft YaHei UI"
+                font.pixelSize: 16
+                font.weight: Font.DemiBold
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+                wrapMode: Text.WordWrap
+                maximumLineCount: 2
+                elide: Text.ElideRight
+            }
+        }
+
+        // 播放进度：支持拖动（酷狗等不可 seek 的播放器只读）
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 8
+
+            Text {
+                Layout.preferredWidth: 38
+                text: root.formatTime(
+                    progressTrack.dragging
+                        ? progressTrack.dragFraction * mediaControlModel.duration
+                        : mediaControlModel.position
+                )
+                color: "#9aa1aa"
+                font.family: "Microsoft YaHei UI"
+                font.pixelSize: 10
+            }
+
+            Item {
+                id: progressTrack
+                Layout.fillWidth: true
+                Layout.preferredHeight: 14
+
+                property bool dragging: false
+                property real dragFraction: 0
+                readonly property real fraction: {
+                    if (dragging)
+                        return dragFraction
+                    if (mediaControlModel.duration <= 0)
+                        return 0
+                    return Math.max(0, Math.min(1, mediaControlModel.position / mediaControlModel.duration))
+                }
+
+                Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: parent.width
+                    height: 4
+                    radius: 2
+                    color: "#2a2a31"
+                    visible: mediaControlModel.duration > 0
+                }
+
+                Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: parent.width * progressTrack.fraction
+                    height: 4
+                    radius: 2
+                    color: "#52b7ff"
+                    visible: mediaControlModel.duration > 0
+                }
+
+                Rectangle {
+                    width: 10
+                    height: 10
+                    radius: 5
+                    color: "white"
+                    visible: mediaControlModel.duration > 0
+                    anchors.verticalCenter: parent.verticalCenter
+                    x: Math.max(0, Math.min(parent.width - width,
+                                            parent.width * progressTrack.fraction - width / 2))
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    enabled: mediaControlModel.canSeek && mediaControlModel.duration > 0
+                    cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+
+                    onPressed: function(mouse) {
+                        progressTrack.dragging = true
+                        progressTrack.dragFraction = Math.max(0, Math.min(1, mouse.x / width))
+                    }
+                    onPositionChanged: function(mouse) {
+                        if (progressTrack.dragging)
+                            progressTrack.dragFraction = Math.max(0, Math.min(1, mouse.x / width))
+                    }
+                    onReleased: function(mouse) {
+                        if (!progressTrack.dragging)
+                            return
+                        var fraction = Math.max(0, Math.min(1, mouse.x / width))
+                        progressTrack.dragging = false
+                        mediaControlModel.seekToFraction(fraction)
+                    }
+                    onCanceled: progressTrack.dragging = false
+                }
+            }
+
+            Text {
+                Layout.preferredWidth: 46
+                text: mediaControlModel.duration > 0
+                      ? "-" + root.formatTime(
+                            mediaControlModel.duration
+                            - (progressTrack.dragging
+                               ? progressTrack.dragFraction * mediaControlModel.duration
+                               : mediaControlModel.position)
+                        )
+                      : ""
+                color: "#9aa1aa"
+                font.family: "Microsoft YaHei UI"
+                font.pixelSize: 10
+                horizontalAlignment: Text.AlignRight
+            }
+        }
+
+        // 上一首 / 播放暂停 / 下一首
+        RowLayout {
+            Layout.alignment: Qt.AlignHCenter
+            spacing: 20
+
+            Rectangle {
+                width: 36
+                height: 36
+                radius: 18
+                color: prevArea.containsMouse && mediaControlModel.canPrevious ? "#2a2a31" : "transparent"
+                opacity: mediaControlModel.canPrevious ? 1 : 0.32
+
+                Text {
+                    anchors.centerIn: parent
+                    text: "⏮"
+                    color: "white"
+                    font.family: "Segoe UI Symbol"
+                    font.pixelSize: 17
+                }
+
+                MouseArea {
+                    id: prevArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: mediaControlModel.canPrevious
+                    cursorShape: mediaControlModel.canPrevious ? Qt.PointingHandCursor : Qt.ArrowCursor
+                    onClicked: mediaControlModel.previous()
+                }
+            }
+
+            Rectangle {
+                width: 44
+                height: 44
+                radius: 22
+                color: playArea.containsMouse && mediaControlModel.canToggle ? "#2a2a31" : "transparent"
+                opacity: mediaControlModel.canToggle ? 1 : 0.32
+
+                Text {
+                    anchors.centerIn: parent
+                    text: mediaControlModel.playing ? "⏸" : "▶"
+                    color: "white"
+                    font.family: "Segoe UI Symbol"
+                    font.pixelSize: 20
+                }
+
+                MouseArea {
+                    id: playArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: mediaControlModel.canToggle
+                    cursorShape: mediaControlModel.canToggle ? Qt.PointingHandCursor : Qt.ArrowCursor
+                    onClicked: mediaControlModel.toggle()
+                }
+            }
+
+            Rectangle {
+                width: 36
+                height: 36
+                radius: 18
+                color: nextArea.containsMouse && mediaControlModel.canNext ? "#2a2a31" : "transparent"
+                opacity: mediaControlModel.canNext ? 1 : 0.32
+
+                Text {
+                    anchors.centerIn: parent
+                    text: "⏭"
+                    color: "white"
+                    font.family: "Segoe UI Symbol"
+                    font.pixelSize: 17
+                }
+
+                MouseArea {
+                    id: nextArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: mediaControlModel.canNext
+                    cursorShape: mediaControlModel.canNext ? Qt.PointingHandCursor : Qt.ArrowCursor
+                    onClicked: mediaControlModel.next()
+                }
+            }
+        }
+    }
+
     RowLayout {
         id: inputContent
         anchors.fill: parent
@@ -606,6 +944,7 @@ Rectangle {
         anchors.topMargin: 7
         anchors.bottomMargin: 7
         spacing: 10
+        visible: opacity > 0
         opacity: viewMode === "input" ? 1 : 0
         enabled: viewMode === "input"
         Behavior on opacity { NumberAnimation { duration: 180 } }
@@ -677,6 +1016,9 @@ Rectangle {
     Item {
         id: transcriptContent
         anchors.fill: parent
+        // 只在可见（含淡入/淡出过程）时参与排版；否则对话记录的大段 Text
+        // 会在后台持续重排，长会话下拖慢每一帧。
+        visible: opacity > 0
         opacity: viewMode === "transcript" ? 1 : 0
         enabled: viewMode === "transcript"
         Behavior on opacity { NumberAnimation { duration: 180 } }

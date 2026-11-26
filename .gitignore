@@ -28,10 +28,13 @@ dist/
 *.egg-info/
 installer/
 nuitka_build/
-*.bat
 nuitka_build_pyqt5_backup/
 
 
 # 日志文件
 *.log
 .cache/
+
+# 打包脚本
+build_windows.py
+build_nsis.bat

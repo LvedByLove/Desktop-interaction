@@ -1,3 +1,5 @@
+from functools import lru_cache
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 
@@ -561,8 +563,13 @@ def _asset_url(filename: str) -> str:
     return ""
 
 
+@lru_cache(maxsize=1)
 def settings_dialog_qss() -> str:
-    """返回设置对话框样式，并注入下拉/数值框箭头图片路径."""
+    """返回设置对话框样式，并注入下拉/数值框箭头图片路径.
+
+    资源路径在安装后不变，缓存一次即可，避免每次打开设置都做整串替换
+    并让 Qt 重新解析约 470 行 QSS。
+    """
     qss = SETTINGS_DIALOG_QSS
     tokens = {
         "__SPIN_ARROW_UP__": "spin_arrow_up.png",

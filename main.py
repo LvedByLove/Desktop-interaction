@@ -96,7 +96,7 @@ def check_single_instance(wait_seconds: float = 0.0) -> bool:
 
 
 from src.application import Application
-from src.utils.logging_config import get_logger, setup_logging
+from src.utils.logging_config import get_logger, setup_logging, stop_logging
 
 
 def wait_for_parent_exit(parent_pid: int) -> bool:
@@ -390,7 +390,11 @@ if __name__ == "__main__":
             except Exception:
                 pass
 
-        # 显式刷新日志后再退出
+        # 先停掉异步日志线程（刷出队列），再刷新日志后退出
+        try:
+            stop_logging()
+        except Exception:
+            pass
         try:
             import logging
 

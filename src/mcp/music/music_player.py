@@ -41,8 +41,8 @@ class MusicPlayer:
     # 随机连续播放时，连续失败多少首后自动退出随机模式
     _MAX_SHUFFLE_FAILURES = 3
     # 默认音乐播放音量（0-100）。音乐文件通常按满刻度响度制作，
-    # 在耳机上即使是较低的系统音量也会偏响，因此默认只输出一半增益。
-    DEFAULT_VOLUME = 50
+    # 在耳机上即使是较低的系统音量也会偏响，因此默认输出较低增益。
+    DEFAULT_VOLUME = 20
 
     def __init__(self):
         self._music_queue: Optional[asyncio.Queue] = None
@@ -62,6 +62,10 @@ class MusicPlayer:
         self._volume_percent = self._load_volume_percent()
 
         self.current_song = ""
+        # 供播放控制面板显示：标题/歌手/来源（local / online）
+        self.current_title = ""
+        self.current_artist = ""
+        self.current_source = ""
         self.total_duration = 0
         self.is_playing = False
         self.paused = False
@@ -277,16 +281,26 @@ class MusicPlayer:
 
         index = {}
         try:
-            for path in sorted(self.music_dir.rglob("*")):
-                if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS:
-                    rel = path.relative_to(self.music_dir).as_posix()
-                    index[rel] = path
+            # 先按扩展名过滤再 stat：避免对目录和上千个非音频文件逐个 is_file()。
+            audio_paths = [
+                path
+                for path in self.music_dir.rglob("*")
+                if path.suffix.lower() in AUDIO_EXTENSIONS and path.is_file()
+            ]
+            for path in sorted(audio_paths):
+                rel = path.relative_to(self.music_dir).as_posix()
+                index[rel] = path
         except Exception as e:
+            # 目录级失败：缓存空索引，下次 TTL 过期（或切歌）再试。
             logger.error(f"扫描本地音乐目录失败: {e}", exc_info=True)
 
         self._music_index_cache = index
         self._music_index_scanned_at = time.monotonic()
         return index
+
+    async def scan_music_files_async(self) -> dict:
+        """异步扫描音乐目录：把 rglob/stat 放到线程池，避免阻塞事件循环."""
+        return await asyncio.to_thread(self._scan_music_files)
 
     @staticmethod
     def _song_name_tokens(stem: str) -> tuple:
@@ -383,11 +397,17 @@ class MusicPlayer:
         # 随机续播内部切歌时保留随机模式；手动点歌/单曲随机则退出随机模式
         await self._stop_impl(clear_queue=True, keep_shuffle=keep_shuffle)
         self.current_song = file_path.stem
-        self.total_duration = 0
+        self.current_title = file_path.stem
+        self.current_artist = ""
+        self.current_source = "local"
+        self.total_duration = self._probe_duration(file_path)
         self.lyrics = self._load_lyrics(file_path)
         self._decode_recovery_attempts = 0
         if not await self._start_playback(file_path):
             self.current_song = ""
+            self.current_title = ""
+            self.current_artist = ""
+            self.current_source = ""
             self.lyrics = []
             return {"status": "error", "message": f"播放失败: {file_path.name}"}
         return {"status": "success", "message": f"开始播放: {self.current_song}"}
@@ -431,12 +451,18 @@ class MusicPlayer:
         await self._stop_impl(clear_queue=True)
 
         self.current_song = hit.display_name
-        self.total_duration = float(hit.duration or 0)
+        self.current_title = str(hit.title or hit.display_name or "")
+        self.current_artist = str(hit.artist or "")
+        self.current_source = "online"
+        self.total_duration = float(hit.duration or 0) or self._probe_duration(path)
         self.lyrics = self._load_lyrics(path)
         self._decode_recovery_attempts = 0
 
         if not await self._start_playback(path):
             self.current_song = ""
+            self.current_title = ""
+            self.current_artist = ""
+            self.current_source = ""
             self.lyrics = []
             return {"status": "error", "message": f"播放失败: {hit.display_name}"}
 
@@ -870,6 +896,9 @@ class MusicPlayer:
             if not keep_shuffle:
                 await self._disable_shuffle()
             await self._stop_playback(reset_state=True)
+            self.current_title = ""
+            self.current_artist = ""
+            self.current_source = ""
             codec = self._ensure_audio_codec()
             if clear_queue and codec:
                 await codec.clear_audio_queue(channel=OUTPUT_CHANNEL_MUSIC)
@@ -998,6 +1027,25 @@ class MusicPlayer:
                 f"歌词可用: {'是' if len(self.lyrics) > 0 else '否'}"
             ),
         }
+
+    @staticmethod
+    def _probe_duration(file_path: Path) -> float:
+        """读取音频文件总时长（秒）；失败返回 0，不影响播放。
+
+        本地歌曲原本没有总时长，播放面板就无法画进度条和拖动 seek。
+        mutagen 只读文件头，成本很低。
+        """
+        try:
+            from mutagen import File as MutagenFile
+
+            audio = MutagenFile(str(file_path))
+            info = getattr(audio, "info", None) if audio is not None else None
+            length = float(getattr(info, "length", 0.0) or 0.0)
+            if 0.0 < length < 86400.0:
+                return length
+        except Exception:
+            pass
+        return 0.0
 
     def _load_lyrics(self, file_path: Path) -> list:
         """

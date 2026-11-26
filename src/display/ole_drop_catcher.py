@@ -475,8 +475,12 @@ class OleDropCatcher(QObject):
         self._thread.start()
 
     def show(self):
-        """显示隐形捕捉窗口（拖拽期间调用）。"""
-        if not self._ready.wait(2.0):
+        """显示隐形捕捉窗口（拖拽期间调用）。
+
+        该调用发生在 GUI 线程；未就绪时最多等 50ms 就跳过本次显示，
+        绝不让拖拽开始卡住主线程（捕捉器本身是尽力而为的精确判定）。
+        """
+        if not self._ready.wait(0.05):
             logger.debug("OLE 捕捉窗口未就绪，跳过显示")
             return
         try:
@@ -485,10 +489,10 @@ class OleDropCatcher(QObject):
             logger.warning(f"显示 OLE 捕捉窗口失败: {e}")
 
     def hide(self):
-        """隐藏隐形捕捉窗口。"""
+        """隐藏隐形捕捉窗口（GUI 线程；未就绪时最多等 50ms）。"""
         if not self._thread or not self._thread.is_alive():
             return
-        if not self._ready.wait(2.0):
+        if not self._ready.wait(0.05):
             return
         try:
             _user32.PostMessageW(self._hwnd, WM_APP_HIDE, 0, 0)

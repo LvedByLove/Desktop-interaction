@@ -9,6 +9,10 @@ logger = get_logger(__name__)
 class _AppAdapter:
     """
     为日程提醒服务提供 _send_text_tts 的适配器.
+
+    服务端的 listen/detect 通道只接受唤醒词，长文本会被拒绝并告警
+    （"Detect is only for wake words, do not send long texts."），
+    因此提醒改走本地提示：只在主胶囊的 TTS 提示界面弹出文本。
     """
 
     def __init__(self, app: Any) -> None:
@@ -16,17 +20,11 @@ class _AppAdapter:
 
     async def _send_text_tts(self, text: str):
         try:
-            # 通过协议触发TTS（与 ApplicationMain 的行为对齐）
-            if not getattr(self._app, "protocol", None):
-                return
-            try:
-                if not self._app.is_audio_channel_opened():
-                    await self._app.connect_protocol()
-            except Exception:
-                pass
-            await self._app.protocol.send_wake_word_detected(text)
-        except Exception:
-            # 兜底：无法TTS时，回退到UI文本
+            from src.utils.notifications import announce
+
+            await announce(text)
+        except Exception as e:
+            logger.warning(f"日程提醒播报失败: {e}")
             try:
                 if hasattr(self._app, "set_chat_message"):
                     self._app.set_chat_message("assistant", text)

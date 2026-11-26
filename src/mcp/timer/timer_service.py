@@ -173,6 +173,30 @@ class TimerService:
                 "current_time": current_time.isoformat(),
             }
 
+    def snapshot_active_timers(self) -> list:
+        """同步读取活动倒计时（供界面展示，调用方需与事件循环同线程）."""
+        timers = []
+        now = datetime.now()
+        for timer_id, timer_task in list(self._timers.items()):
+            remaining = timer_task.get_remaining_time()
+            if remaining <= 0:
+                continue
+            timers.append(
+                {
+                    "timer_id": timer_id,
+                    "command": timer_task.command,
+                    "description": timer_task.description,
+                    "delay": timer_task.delay,
+                    "remaining_seconds": remaining,
+                    "start_time": timer_task.start_time.isoformat(),
+                    "estimated_execution_time": timer_task.execution_time.isoformat(),
+                    "progress": timer_task.get_progress(),
+                    "now": now.isoformat(),
+                }
+            )
+        timers.sort(key=lambda item: item["estimated_execution_time"])
+        return timers
+
     async def cleanup_timer(self, timer_id: int):
         """
         从管理器中移除已完成的计时器.
@@ -305,6 +329,8 @@ class TimerTask:
             from src.application import Application
 
             app = Application.get_instance()
+            if app is None:
+                return
             if success:
                 message = f"倒计时 {self.timer_id} 执行完成"
                 if self.description:
@@ -314,8 +340,16 @@ class TimerTask:
                 if self.description:
                     message = f"{self.description}执行失败"
 
-            print("倒计时：", message)
-            await app._send_text_tts(message)
+            # 不走服务端 listen/detect（只接受唤醒词，长文本会被拒绝并告警），
+            # 改为本地提示：只在主胶囊的 TTS 提示界面弹出文本。
+            sender = getattr(app, "_send_text_tts", None)
+            if sender is not None:
+                await sender(message)
+                return
+
+            from src.utils.notifications import announce
+
+            await announce(message)
         except Exception as e:
             logger.warning(f"通知倒计时执行结果失败: {e}")
 

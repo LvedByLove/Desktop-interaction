@@ -35,6 +35,8 @@ pynput==1.8.1
 pyperclip==1.9.0
 pypinyin==0.53.0
 tzdata==2026.2
+# 本地音乐时长探测（播放面板进度条 / seek）
+mutagen==1.47.0
 
 # ---- Windows 平台相关 ----
 comtypes==1.4.17
@@ -43,8 +45,15 @@ pywin32==311
 screen_brightness_control==0.27.1
 WMI==1.5.1
 
+# ---- Windows 系统媒体会话（外部播放器歌词 / 控制）----
+# winsdk 没有 Python 3.13 轮子，改用官方 PyWinRT 模块包。
+winrt-runtime==4.2.0
+winrt-Windows.Foundation>=4.0.0
+winrt-Windows.Media>=4.0.0
+winrt-Windows.Media.Control>=4.0.0
+winrt-Windows.Storage.Streams>=4.0.0
+
 # ---- 可选：scripts/ 下的开发调试脚本所需（主程序运行不需要）----
-mutagen==1.47.0
 pygame==2.6.1
 pyaudio>=0.2.14
 scipy>=1.11.0

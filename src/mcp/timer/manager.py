@@ -85,14 +85,17 @@ class TimerToolsManager:
         add_tool(
             (
                 "timer.start_countdown",
-                "Start a countdown timer that will execute an MCP tool after a specified delay. "
-                "The command should be a JSON string containing MCP tool name and arguments. "
+                "Start a countdown that executes an existing MCP tool after a delay. "
+                "The command must be a JSON string containing a real MCP tool name and "
+                "arguments. "
                 'For example: \'{"name": "self.audio_speaker.set_volume", "arguments": {"volume": 50}}\' '
-                "Use this when the user wants to: \n"
-                "1. Set a timer to control system settings (volume, device status, etc.) \n"
-                "2. Schedule delayed MCP tool executions \n"
-                "3. Create reminders with automatic tool calls \n"
-                "The timer will return a timer_id that can be used to cancel it later.",
+                "Use ONLY for delayed device/system actions such as lowering volume or "
+                "turning off a lamp after N seconds. "
+                "Do NOT use this tool for user reminders or schedules (for example "
+                "'remind me to drink water in 1 minute'). Reminders must use "
+                "self.calendar.create_event so they appear in the schedule view and "
+                "are announced by the reminder service. "
+                "The timer returns a timer_id that can be used to cancel it later.",
                 timer_props,
                 start_countdown_timer,
             )

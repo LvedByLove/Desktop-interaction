@@ -34,6 +34,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QVBoxLayout, QWidget
 from src.display.base_display import BaseDisplay
 from src.display.file_tray_model import FileIconProvider, FileTrayModel
 from src.display.gui_display_model import GuiDisplayModel
+from src.display.media_control_model import MediaControlModel
 from src.utils.qt_compat import ensure_quick_controls_style, primary_available_geometry
 from src.utils.resource_finder import find_assets_dir
 
@@ -112,11 +113,15 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
 
         # 数据模型
         self.display_model = GuiDisplayModel()
+        # 外部播放器控制面板（右键歌词胶囊就地展开）
+        self.media_control_model = MediaControlModel()
 
         # 文件中转站：数据源（路径列表）与系统文件图标供给器
         self._file_tray = FileTrayModel()
         self._file_icon_provider = FileIconProvider()
         self._file_tray.set_icon_provider(self._file_icon_provider)
+        # 超量拖入被整批拒绝时，模型发出提示文本，由中转站面板显示警告
+        self._file_tray.dropRejected.connect(self._show_tray_warning)
         # 全局拖拽检测（主动唤醒圆球），延迟到 GUI 启动后再实例化
         self._drag_watcher = None
         # OLE 文件拖拽捕捉器（CF_HDROP 精确判定 + 原生 Drop），延迟到 GUI 启动后再实例化
@@ -153,6 +158,8 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         # TTS 一体化显示状态
         self._tts_hide_timer = None
         self._tts_hide_at = None
+        # 正在展示的日程提醒文本：提醒结束后才写入对话记录
+        self._pending_reminder_text = None
 
         # 输入框激活状态
         self._input_active = False
@@ -240,6 +247,10 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
             self._tts_hide_timer.cancel()
             self._tts_hide_timer = None
         self._tts_hide_at = None
+        # 聆听态接管胶囊：先结束并记录正在展示的提醒
+        self._flush_pending_reminder_text()
+        # 提醒的点击收起失效
+        self.display_model.set_reminder_dismissible(False)
 
         if self.root:
             self.root.show()
@@ -283,18 +294,25 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         """
         return self.get_view_mode() == "listening"
 
-    async def show_tts(self, text: str = ""):
+    async def show_tts(self, text: str = "", record: bool = True):
         """
         在主胶囊窗口内显示 TTS 状态.
+
+        record=False 用于不需要进入对话记录的临时提示（如启动时的当日日程摘要、
+        倒计时执行结果）；日程到点提醒走 show_reminder，展示结束后才写入 transcript。
         """
         if self._tts_hide_timer:
             self._tts_hide_timer.cancel()
             self._tts_hide_timer = None
         self._tts_hide_at = None
+        # 新内容接管胶囊：上一条提醒视为已结束，先写入对话记录
+        self._flush_pending_reminder_text()
+        # 普通播报/新内容接管胶囊时，取消上一次提醒的"点击收起"标记
+        self.display_model.set_reminder_dismissible(False)
 
         self.display_model.update_text(text or "语音播报中...")
         # 普通对话的 TTS 回复计入会话累计文本；音乐歌词不计入
-        if not self.display_model.musicLyricsActive:
+        if record and not self.display_model.musicLyricsActive:
             self.display_model.begin_tts_reply(text)
         self.display_model.set_tts_visible(True)
 
@@ -305,6 +323,36 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         root_object = self.qml_widget.rootObject() if self.qml_widget else None
         if root_object:
             root_object.showTts(text or "语音播报中...")
+
+    async def show_reminder(self, text: str, duration: float = 7.0):
+        """显示一条日程提醒：允许鼠标点击提前收起，结束后写入对话记录。
+
+        音效由调用方（notifications）负责播放。提醒展示期间不写入 transcript，
+        等弹窗收起（点击 / 自动超时 / 被新播报接管）后，再把提醒文本作为一条
+        记录追加到对话记录，与正常播报的记录方式一致。
+        """
+        await self.show_tts(text, record=False)
+        self._pending_reminder_text = text
+        self.display_model.set_reminder_dismissible(True)
+        await self.hide_tts(duration)
+
+    def _flush_pending_reminder_text(self):
+        """把刚结束的日程提醒写入对话记录（只写一次）。"""
+        text = self._pending_reminder_text
+        self._pending_reminder_text = None
+        if text:
+            self.display_model.begin_tts_reply(text)
+
+    def _on_reminder_dismiss_requested(self):
+        """点击提醒弹窗：取消剩余的自动收起计划，立即收起。"""
+        if not self.display_model.reminderDismissible:
+            return
+        if self._tts_hide_timer:
+            self._tts_hide_timer.cancel()
+            self._tts_hide_timer = None
+        self._tts_hide_at = None
+        self._finish_hide_tts()
+        self.logger.info("点击提醒弹窗，已提前收起")
 
     async def hide_tts(self, delay: float = 3.0):
         """
@@ -339,6 +387,9 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         """
         self._tts_hide_timer = None
         self._tts_hide_at = None
+        # 提醒结束（自动超时或点击收起）：此时才写入对话记录
+        self._flush_pending_reminder_text()
+        self.display_model.set_reminder_dismissible(False)
         self.display_model.set_tts_visible(False)
 
         root_object = self.qml_widget.rootObject() if self.qml_widget else None
@@ -362,12 +413,19 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         """
         清空本次会话累计的 TTS 文本（新会话开始时调用）.
         """
+        # 正在进行的新会话不应再补写上一轮遗留的提醒
+        self._pending_reminder_text = None
         self.display_model.clear_tts_transcript()
 
     def set_music_lyrics_active(self, active: bool):
         """
         设置当前 TTS 区域是否由音乐歌词占用.
         """
+        active = bool(active)
+        # 逐行歌词更新会反复同步该状态；值没变时不要重新请求窗口尺寸，
+        # 否则每换一行都会重启几何动画。
+        if self.display_model.musicLyricsActive == active:
+            return
         self.display_model.set_music_lyrics_active(active)
         self._refresh_qml_current_mode_size()
 
@@ -375,6 +433,9 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         """
         设置音乐歌词是否折叠为播放指示器.
         """
+        collapsed = bool(collapsed)
+        if self.display_model.musicLyricsCollapsed == collapsed:
+            return
         self.display_model.set_music_lyrics_collapsed(collapsed)
         self._refresh_qml_current_mode_size()
 
@@ -469,11 +530,13 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         """
         self._input_active = True
         self._input_activated_once = bool(self.root and self.root.isActiveWindow())
-        if self._input_activation_timer:
-            self._input_activation_timer.stop()
-
         self._focus_input_text()
-        self._input_activation_timer = QTimer.singleShot(80, self._focus_input_text)
+        # 用可复用的单次 QTimer（singleShot 返回 None，无法被 stop）
+        if self._input_activation_timer is None:
+            self._input_activation_timer = QTimer(self.root)
+            self._input_activation_timer.setSingleShot(True)
+            self._input_activation_timer.timeout.connect(self._focus_input_text)
+        self._input_activation_timer.start(80)
         QTimer.singleShot(260, self._focus_input_text)
         QTimer.singleShot(520, self._focus_input_text)
 
@@ -575,10 +638,38 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
             root_object.hideInput()
             self._input_active = False
 
+    def _close_music_panel_if_open(self):
+        """窗口失去前台焦点时收起播放面板。"""
+        if not self.root or not self.qml_widget:
+            return
+        # 激活过程中的瞬时失焦不关闭，确认窗口确实不在前台。
+        if self.root.isActiveWindow():
+            return
+        try:
+            root_object = self.qml_widget.rootObject()
+        except RuntimeError:
+            return
+        if root_object and root_object.property("musicPanelOpen"):
+            try:
+                root_object.closeMusicPanel()
+            except Exception as e:
+                self.logger.debug(f"失焦收起播放面板失败: {e}")
+
     def eventFilter(self, watched, event):
         """
         主胶囊输入时点击其它位置自动收起输入框.
         """
+        # 装在 QApplication 上的过滤器会收到所有对象、所有类型的事件；
+        # 先按事件类型快速放行，避免每个 paint/move/timer 事件都去取 rootObject。
+        event_type = event.type()
+        if event_type not in (
+            QEvent.WindowActivate,
+            QEvent.WindowDeactivate,
+            QEvent.ApplicationDeactivate,
+            QEvent.MouseButtonPress,
+        ):
+            return super().eventFilter(watched, event)
+
         try:
             root_object = self.qml_widget.rootObject() if self.qml_widget else None
         except RuntimeError:
@@ -601,6 +692,9 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
             ):
                 QTimer.singleShot(150, self._hide_input_if_inactive)
             self._input_active = False
+            # 播放面板：点击窗口外 / 切到其它应用时自动收回到紧凑歌词。
+            if root_object.property("musicPanelOpen"):
+                QTimer.singleShot(0, self._close_music_panel_if_open)
 
         if watched == self.app and event.type() == QEvent.ApplicationDeactivate:
             if (
@@ -609,6 +703,8 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
             ):
                 QTimer.singleShot(150, self._hide_input_if_inactive)
             self._input_active = False
+            if root_object.property("musicPanelOpen"):
+                QTimer.singleShot(0, self._close_music_panel_if_open)
 
         if watched == self.app and self._input_active and event.type() == QEvent.MouseButtonPress:
             if root_object.property("viewMode") == "input":
@@ -892,6 +988,9 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         # 注册数据模型到 QML 上下文
         qml_context = self.qml_widget.rootContext()
         qml_context.setContextProperty("displayModel", self.display_model)
+        qml_context.setContextProperty(
+            "mediaControlModel", self.media_control_model
+        )
 
         # 加载 QML 文件
         qml_file = Path(__file__).parent / "gui_display.qml"
@@ -942,6 +1041,54 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         layout = QVBoxLayout(self.tray_root)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.tray_qml)
+
+    def show_media_controls(self):
+        """右键歌词胶囊：原地向下展开 / 收起播放面板。"""
+        if self.qml_widget is None:
+            return
+        root_object = self.qml_widget.rootObject()
+        if root_object is None:
+            return
+
+        try:
+            is_open = bool(root_object.property("musicPanelOpen"))
+        except Exception:
+            is_open = False
+
+        if is_open:
+            try:
+                root_object.closeMusicPanel()
+            except Exception as e:
+                self.logger.debug(f"收起播放面板失败: {e}")
+            return
+
+        # 从待机短横线打开时先恢复歌词，保证 ttsText 持续更新；
+        # 再切到 tts 态，QML 会按 musicPanelOpen 向下展开。
+        try:
+            from src.application import Application
+
+            application = Application.get_instance()
+            ui = application.plugins.get_plugin("ui") if application else None
+            if ui is not None and hasattr(ui, "expand_music_lyrics"):
+                application.spawn(
+                    ui.expand_music_lyrics(), "ui:expand_music_lyrics"
+                )
+        except Exception as e:
+            self.logger.debug(f"恢复歌词失败（仍打开播放面板）: {e}")
+
+        try:
+            root_object.setProperty("musicPanelOpen", True)
+            root_object.applyMode("tts")
+        except Exception as e:
+            self.logger.debug(f"展开播放面板失败: {e}")
+
+        # 让主窗口获得焦点：点击其它窗口/桌面时触发失焦，面板自动收起。
+        try:
+            if self.root is not None:
+                self.root.raise_()
+                self.root.activateWindow()
+        except Exception as e:
+            self.logger.debug(f"激活播放面板窗口失败: {e}")
 
     def _setup_interactions(self):
         """
@@ -1005,6 +1152,8 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         system_signals = {
             "hiddenModeChanged": self._on_hidden_mode_changed,
             "listeningSettled": self._on_listening_settled,
+            "mediaControlRequested": self.show_media_controls,
+            "reminderDismissRequested": self._on_reminder_dismiss_requested,
         }
 
         # 批量连接信号
@@ -1105,9 +1254,13 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         主胶囊处于待机短横线时，唤醒薄条收回到横线位置再隐藏，形成
         「唤醒条 → 短横线」的还原变形；其它形态下退回淡出。
         """
+        # 延后执行期间可能已经开始下一次拖拽，不能收起新拖拽的唤醒条
+        if self._drag_active:
+            return
         root_object = self.tray_qml.rootObject() if self.tray_qml else None
         tray_visible = bool(root_object.property("trayVisible")) if root_object else False
         if not tray_visible and self.tray_root and self.tray_root.isVisible():
+            self.logger.debug("拖拽结束后收起中转站窗口（面板未打开）")
             if self._can_morph_from_standby_line():
                 self._collapse_tray_to_line()
             else:
@@ -1147,6 +1300,12 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
                 )
             anim = self._tray_geometry_anim
             if anim.state() == QPropertyAnimation.Running:
+                # 同一目标的重复请求不重启动画
+                try:
+                    if anim.endValue() == target_rect:
+                        return True
+                except Exception:
+                    pass
                 anim.stop()
             anim.setDuration(duration)
             anim.setStartValue(self.tray_root.geometry())
@@ -1500,6 +1659,30 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
                 # 如果底部超出，向上调整位置
                 new_y = screen_rect.bottom() - height
 
+            # 目标几何与当前完全一致时直接返回：歌词逐行更新等场景会反复
+            # 请求同一尺寸，没必要重启一次 220ms 的几何动画。
+            # 注意：几何动画进行中时当前几何只是中间帧，不能据此跳过——
+            # “TTS 收起 → 歌词立刻恢复”会在收缩动画未结束时请求原尺寸，
+            # 跳过会让窗口继续缩成小胶囊。
+            animation_running = (
+                getattr(self, "_window_animation", None) is not None
+                and self._window_animation.state() == QPropertyAnimation.Running
+            )
+            target_rect = QRect(new_x, new_y, width, height)
+            if animation_running:
+                # 动画进行中重复请求同一个目标（例如 show_tts 同时经 QML
+                # ttsVisible 信号和直接调用各触发一次）时不要 stop/restart，
+                # 否则会把同一段 220ms 动画反复从头播放。
+                try:
+                    if self._window_animation.endValue() == target_rect:
+                        return
+                except Exception:
+                    pass
+            elif target_rect == QRect(
+                current_x, current_y, current_width, current_height
+            ):
+                return
+
             # 使用 Qt 动画实现平滑过渡（短横线 / 各胶囊形态之间统一走几何动画）
             try:
                 # 如果动画正在运行，先停止
@@ -1516,7 +1699,7 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
                     )
                 
                 self._window_animation.setStartValue(self.root.geometry())
-                self._window_animation.setEndValue(QRect(new_x, new_y, width, height))
+                self._window_animation.setEndValue(target_rect)
                 self._window_animation.start()
                 
                 self.logger.debug(f"窗口大小已调整为: {width}x{height}，位置: ({new_x}, {new_y})")
@@ -1637,7 +1820,10 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
                 root_object.unwakeBall()
             except Exception as e:
                 self.logger.warning(f"唤醒薄条回落失败: {e}")
-        self._hide_tray_window_if_idle()
+        # 与捕捉窗口一样延后检查：pynput 的松手信号通常比 OLE Drop 早到几毫秒，
+        # 立即收起会把刚在 Drop 回调里展开的中转站误隐藏（音乐播放时事件循环
+        # 更忙，这个时序更容易翻转）。延后 250ms 让 Drop 先处理完。
+        QTimer.singleShot(250, lambda: self._hide_tray_window_if_idle())
 
     def _hide_catcher_if_idle(self, catcher):
         """延迟隐藏捕捉窗口：期间若已开始新的拖拽则保持显示。"""
@@ -1679,6 +1865,10 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
 
         QML DropArea 传入的是 file:/// 形式的 URL 列表，这里提取本地路径并去重加入。
         """
+        if self._internal_drag:
+            # 从中转站往外拖时松手落回中转站窗口，QML DropArea 会收到一次
+            # "自我 Drop"。它不是新的外部文件，忽略即可，避免重复加入。
+            return
         try:
             # QML 信号传入的数组在 Python 侧是 QJSValue，需转成 Python 列表
             if hasattr(urls, "toVariant"):
@@ -1706,6 +1896,25 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         for p in added:
             self._file_icon_provider.icon_url_for_path(p)
         return added
+
+    def _show_tray_warning(self, message: str):
+        """在中转站面板底部显示一条短暂警告（超量拖入等）."""
+        try:
+            self.logger.warning(message)
+        except Exception:
+            pass
+        root_object = self.tray_qml.rootObject() if self.tray_qml else None
+        if root_object is not None:
+            try:
+                if hasattr(root_object, "showWarning"):
+                    root_object.showWarning(message)
+            except Exception as e:
+                self.logger.debug(f"显示中转站警告失败: {e}")
+        # 警告可能来自 OLE 原生 Drop（窗口仍隐藏），确保面板可见
+        try:
+            self._show_tray_window()
+        except Exception as e:
+            self.logger.debug(f"显示中转站窗口失败: {e}")
 
     def _on_native_files_dropped(self, paths):
         """处理 OLE 捕捉器原生接收的文件 Drop（不经过 Qt 窗口）。

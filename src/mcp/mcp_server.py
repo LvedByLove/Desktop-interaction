@@ -289,6 +289,7 @@ class McpServer:
             ("calendar", self._register_calendar_tools),
             ("timer", self._register_timer_tools),
             ("music", self._register_music_tools),
+            ("media_session", self._register_media_tools),
             ("camera", self._register_camera_tool),
             ("screenshot", self._register_screenshot_tool),
             ("file_tools", self._register_file_tools),
@@ -331,6 +332,13 @@ class McpServer:
 
         music_manager = get_music_tools_manager()
         music_manager.init_tools(self.add_tool, PropertyList, Property, PropertyType)
+
+    def _register_media_tools(self):
+        """注册系统媒体会话（外部播放器）工具."""
+        from src.mcp.media import get_media_tools_manager
+
+        media_manager = get_media_tools_manager()
+        media_manager.init_tools(self.add_tool, PropertyList, Property, PropertyType)
 
     def _register_camera_tool(self):
         """注册拍照识图工具."""

@@ -164,14 +164,12 @@ class UIPlugin(Plugin):
         """
         处理传入的 JSON 消息.
         """
-        from src.utils.logging_config import get_logger
-        logger = get_logger(__name__)
-        
         if not isinstance(message, dict):
             return
 
         msg_type = message.get("type")
-        logger.debug(f"UI插件收到JSON消息: type={msg_type}, message={message}")
+        # 用 %s 惰性格式化：DEBUG 关闭时不会构造整条消息字符串。
+        logger.debug("UI插件收到JSON消息: type=%s, message=%s", msg_type, message)
 
         # tts/stt 都更新文本
         if msg_type in ("tts", "stt"):
@@ -185,7 +183,11 @@ class UIPlugin(Plugin):
             state = message.get("state")
             text = message.get("text")
 
-            logger.debug(f"TTS消息状态: {state}, 文本: {text[:20] if text else None}")
+            logger.debug(
+                "TTS消息状态: %s, 文本: %s",
+                state,
+                text[:20] if text else None,
+            )
 
             if state == "start":
                 # 新的播报开始：上一轮后端音乐（如果有）已经结束
@@ -223,10 +225,10 @@ class UIPlugin(Plugin):
                     await self._begin_remote_music_lyrics()
                 elif self._remote_music_lyrics:
                     # 后端音乐期间的所有文本（歌名、歌词）都按歌词更新
-                    logger.info(f"歌词更新: {text[:30]}")
+                    logger.debug("歌词更新: %s", text[:30])
                     await self.update_music_lyrics(text)
                 elif self.display and hasattr(self.display, "update_tts_text"):
-                    logger.info(f"TTS文本更新: {text[:30]}")
+                    logger.debug("TTS文本更新: %s", text[:30])
                     await self.display.update_tts_text(text)
 
         # llm 更新表情

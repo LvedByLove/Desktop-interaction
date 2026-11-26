@@ -27,6 +27,8 @@ class ConfigManager:
             "CLIENT_ID": None,
             "DEVICE_ID": None,
             "AUTOSTART": False,
+            # 主胶囊窗口尺寸模式：default / screen_75 / screen_100
+            "WINDOW_SIZE_MODE": "default",
             "NETWORK": {
                 "OTA_VERSION_URL": "https://api.tenclass.net/xiaozhi/ota/",
                 "WEBSOCKET_URL": None,
@@ -37,9 +39,10 @@ class ConfigManager:
             },
         },
         "WAKE_WORD_OPTIONS": {
-            "USE_WAKE_WORD": True,
+            # 默认不开启唤醒词：使用全局快捷键按住说话（Ctrl+Alt）
+            "USE_WAKE_WORD": False,
             "MODEL_PATH": "models",
-            "NUM_THREADS": 4,
+            "NUM_THREADS": 2,
             "PROVIDER": "cpu",
             "MAX_ACTIVE_PATHS": 2,
             "KEYWORDS_SCORE": 1.8,
@@ -109,7 +112,7 @@ class ConfigManager:
             # 为空时使用默认音乐目录（用户音乐目录下的 music 子目录）
             "MUSIC_DIR": None,
             # 音乐播放音量（0-100），只影响本程序播放的音乐
-            "VOLUME": 50,
+            "VOLUME": 20,
             # 在线音乐 API（留空使用内置默认值）
             "SEARCH_URL": None,
             "URL_API": None,

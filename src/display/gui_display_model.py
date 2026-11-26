@@ -3,7 +3,12 @@
 GUI 显示窗口数据模型 - 用于 QML 数据绑定.
 """
 
-from PySide6.QtCore import QObject, Property, Signal
+from PySide6.QtCore import QObject, Property, QTimer, Signal
+
+
+# 流式 TTS 会逐 token 更新；对话记录文本的 join + QML 重排做 120ms 合并，
+# 避免每来一个片段就重排整段历史（长会话下会越说越卡）。
+_TRANSCRIPT_DEBOUNCE_MS = 120
 
 
 class GuiDisplayModel(QObject):
@@ -19,6 +24,7 @@ class GuiDisplayModel(QObject):
     ttsTranscriptChanged = Signal()
     musicLyricsActiveChanged = Signal()
     musicLyricsCollapsedChanged = Signal()
+    reminderDismissibleChanged = Signal()
     buttonTextChanged = Signal()
     modeTextChanged = Signal()
     autoModeChanged = Signal()
@@ -39,9 +45,17 @@ class GuiDisplayModel(QObject):
         self._emotion_path = ""  # 表情资源路径（GIF/图片）或 emoji 字符
         self._tts_text = "待命"
         self._tts_transcript = []  # 本次会话累计的所有 TTS 回复文本（每条一个元素）
+        # 缓存 join 结果，避免 QML 每次读取都重新拼接整段历史
+        self._tts_transcript_text = ""
+        self._transcript_dirty = False
+        self._transcript_timer = QTimer(self)
+        self._transcript_timer.setSingleShot(True)
+        self._transcript_timer.setInterval(_TRANSCRIPT_DEBOUNCE_MS)
+        self._transcript_timer.timeout.connect(self._flush_transcript_text)
         self._tts_visible = False  # TTS窗口可见性
         self._music_lyrics_active = False  # 当前 TTS 区域是否显示音乐歌词
         self._music_lyrics_collapsed = False  # 音乐歌词是否折叠为播放指示器
+        self._reminder_dismissible = False  # 当前 TTS 文本是否为可点击提前收起的提醒
         self._button_text = "开始对话"  # 自动模式按钮文本
         self._mode_text = "手动对话"  # 模式切换按钮文本
         self._auto_mode = False  # 是否自动模式
@@ -83,14 +97,36 @@ class GuiDisplayModel(QObject):
     # TTS 会话累计文本属性（大胶囊内显示整段对话文本）
     @Property(str, notify=ttsTranscriptChanged)
     def ttsTranscript(self):
-        return "\n\n".join(t for t in self._tts_transcript if t)
+        return self._tts_transcript_text
 
     @ttsTranscript.setter
     def ttsTranscript(self, value):
         value = value or ""
-        if self.ttsTranscript != value:
-            self._tts_transcript = [value] if value else []
-            self.ttsTranscriptChanged.emit()
+        self._tts_transcript = [value] if value else []
+        self._transcript_timer.stop()
+        self._transcript_dirty = False
+        self._set_transcript_text("\n\n".join(t for t in self._tts_transcript if t))
+
+    def _set_transcript_text(self, text: str) -> None:
+        """更新缓存文本，仅在真正变化时通知 QML."""
+        if text == self._tts_transcript_text:
+            return
+        self._tts_transcript_text = text
+        self.ttsTranscriptChanged.emit()
+
+    def _schedule_transcript_flush(self) -> None:
+        """把连续更新合并成一次 join + 一次 QML 重排."""
+        self._transcript_dirty = True
+        if not self._transcript_timer.isActive():
+            self._transcript_timer.start()
+
+    def _flush_transcript_text(self) -> None:
+        if not self._transcript_dirty:
+            return
+        self._transcript_dirty = False
+        self._set_transcript_text(
+            "\n\n".join(t for t in self._tts_transcript if t)
+        )
 
     # TTS 可见性属性
     @Property(bool, notify=ttsVisibleChanged)
@@ -125,6 +161,18 @@ class GuiDisplayModel(QObject):
         if self._music_lyrics_collapsed != value:
             self._music_lyrics_collapsed = value
             self.musicLyricsCollapsedChanged.emit()
+
+    # 提醒可点击收起属性：仅日程到点提醒为 True，普通 TTS 回复不受影响
+    @Property(bool, notify=reminderDismissibleChanged)
+    def reminderDismissible(self):
+        return self._reminder_dismissible
+
+    @reminderDismissible.setter
+    def reminderDismissible(self, value):
+        value = bool(value)
+        if self._reminder_dismissible != value:
+            self._reminder_dismissible = value
+            self.reminderDismissibleChanged.emit()
 
     # 自动模式按钮文本属性
     @Property(str, notify=buttonTextChanged)
@@ -205,7 +253,7 @@ class GuiDisplayModel(QObject):
         """
         cleaned = self._clean_transcript(text)
         self._tts_transcript.append(cleaned)
-        self.ttsTranscriptChanged.emit()
+        self._schedule_transcript_flush()
 
     def update_tts_reply(self, text: str):
         """
@@ -221,6 +269,8 @@ class GuiDisplayModel(QObject):
         if self._tts_transcript:
             prev = self._tts_transcript[-1] or ""
             if cleaned.startswith(prev):
+                if cleaned == prev:
+                    return
                 # 累积式流式：覆盖最后一条为增长后的全文
                 self._tts_transcript[-1] = cleaned
             else:
@@ -228,15 +278,17 @@ class GuiDisplayModel(QObject):
                 self._tts_transcript.append(cleaned)
         else:
             self._tts_transcript.append(cleaned)
-        self.ttsTranscriptChanged.emit()
+        self._schedule_transcript_flush()
 
     def clear_tts_transcript(self):
         """
         清空本次会话累计的 TTS 文本（新会话开始时调用）.
         """
-        if self._tts_transcript:
+        self._transcript_timer.stop()
+        self._transcript_dirty = False
+        if self._tts_transcript or self._tts_transcript_text:
             self._tts_transcript = []
-            self.ttsTranscriptChanged.emit()
+            self._set_transcript_text("")
 
     def set_music_lyrics_active(self, active: bool):
         """
@@ -249,6 +301,12 @@ class GuiDisplayModel(QObject):
         设置音乐歌词折叠状态.
         """
         self.musicLyricsCollapsed = collapsed
+
+    def set_reminder_dismissible(self, dismissible: bool):
+        """
+        设置当前提醒是否允许点击提前收起.
+        """
+        self.reminderDismissible = dismissible
 
     def update_emotion(self, emotion_path: str):
         """

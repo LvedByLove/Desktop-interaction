@@ -11,8 +11,9 @@ from src.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-# 常量配置
-MAX_CONCURRENT_AUDIO_SENDS = 4
+# 待发送音频队列上限：64 帧 × 20ms ≈ 1.28 秒。网络慢时丢最旧帧，
+# 保持低延迟，避免每帧新建 Task 无界堆积。
+_AUDIO_SEND_QUEUE_MAX = 64
 
 # 唤醒会话期间判定"用户正在说话"的麦克风峰值（int16）
 _VOICE_ACTIVITY_PEAK = 2000
@@ -28,7 +29,8 @@ class AudioPlugin(Plugin):
         self.codec: AudioCodec | None = None
         self._main_loop = None
         self._audio_consumer_task = None
-        self._send_sem = asyncio.Semaphore(MAX_CONCURRENT_AUDIO_SENDS)
+        self._send_queue: asyncio.Queue[bytes] | None = None
+        self._send_task: asyncio.Task | None = None
         self._in_silence_period = False  # 静默期标志，用于防止TTS尾音被捕获
 
     async def setup(self, app: Any) -> None:
@@ -42,7 +44,12 @@ class AudioPlugin(Plugin):
             self.codec = AudioCodec()
             await self.codec.initialize()
 
-            # 设置编码音频回调：直接发送，不走队列
+            # 常驻发送协程 + 有界队列：回调线程只投递，网络慢时有界丢帧，
+            # 不再每帧创建一个 asyncio Task。
+            self._send_queue = asyncio.Queue(maxsize=_AUDIO_SEND_QUEUE_MAX)
+            self._send_task = asyncio.create_task(
+                self._send_loop(), name="audio:send"
+            )
             self.codec.set_encoded_callback(self._on_encoded_audio)
 
             # 暴露给应用，便于唤醒词插件使用
@@ -72,7 +79,7 @@ class AudioPlugin(Plugin):
     def on_audio_data(self, audio_data: np.ndarray) -> None:
         """音频监听回调（PortAudio 线程）：唤醒会话期间上报用户说话活动.
 
-        只做一次最大值计算和一次时间戳赋值，开销可以忽略。
+        只做一次 min/max 扫描，不分配 int32 临时数组。
         """
         app = self.app
         if app is None or not getattr(app, "wake_session_active", False):
@@ -80,8 +87,8 @@ class AudioPlugin(Plugin):
         try:
             if len(audio_data) == 0:
                 return
-            # 转 int32 避免 np.abs(-32768) 的 int16 溢出
-            peak = int(np.max(np.abs(audio_data.astype(np.int32))))
+            # 用 int 比较，避免 np.abs(-32768) 的 int16 溢出
+            peak = max(int(audio_data.max()), -int(audio_data.min()))
             if peak >= _VOICE_ACTIVITY_PEAK:
                 app.notify_wake_voice_activity()
         except Exception:
@@ -223,6 +230,18 @@ class AudioPlugin(Plugin):
         """
         logger.info("正在关闭音频插件...")
 
+        # 停止常驻发送协程（先取消，再断开队列引用）
+        send_task, self._send_task = self._send_task, None
+        if send_task is not None and not send_task.done():
+            send_task.cancel()
+            try:
+                await send_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+        self._send_queue = None
+
         # 停止音频消费者任务
         if self._audio_consumer_task and not self._audio_consumer_task.done():
             self._audio_consumer_task.cancel()
@@ -250,42 +269,52 @@ class AudioPlugin(Plugin):
     # 内部：直接发送录音音频（不走队列）
     # -------------------------
     def _on_encoded_audio(self, encoded_data: bytes) -> None:
-        """
-        音频线程回调：切换到主循环并直接发送（参考旧版本）
-        """
+        """PortAudio 回调线程：只投递到事件循环，不创建 Task."""
         try:
-            if not self.app or not self._main_loop or not self.app.running:
+            loop = self._main_loop
+            if loop is None or loop.is_closed():
                 return
-            if self._main_loop.is_closed():
-                return
-            self._main_loop.call_soon_threadsafe(
-                self._schedule_send_audio, encoded_data
-            )
+            loop.call_soon_threadsafe(self._enqueue_send_audio, encoded_data)
         except Exception:
             pass
 
-    def _schedule_send_audio(self, encoded_data: bytes) -> None:
-        """
-        在主事件循环中调度发送任务.
-        """
-        if not self.app or not self.app.running or not self.app.protocol:
+    def _enqueue_send_audio(self, encoded_data: bytes) -> None:
+        """事件循环线程：有界入队，满时丢最旧帧（低延迟优先）."""
+        queue = self._send_queue
+        if queue is None:
             return
+        try:
+            queue.put_nowait(encoded_data)
+        except asyncio.QueueFull:
+            try:
+                queue.get_nowait()
+                queue.put_nowait(encoded_data)
+            except (asyncio.QueueEmpty, asyncio.QueueFull):
+                pass
 
-        async def _send():
-            async with self._send_sem:
-                try:
-                    if not (
-                        self.app.protocol
-                        and self.app.protocol.is_audio_channel_opened()
-                    ):
-                        return
-                    if self._should_send_microphone_audio():
-                        await self.app.protocol.send_audio(encoded_data)
-                except Exception:
-                    pass
-
-        # 创建任务但不等待，实现"发完即忘"
-        self.app.spawn(_send(), name="audio:send")
+    async def _send_loop(self) -> None:
+        """常驻发送协程：串行发送、天然背压，不再每帧建 Task."""
+        queue = self._send_queue
+        if queue is None:
+            return
+        while True:
+            encoded_data = await queue.get()
+            try:
+                protocol = self.app.protocol if self.app else None
+                if (
+                    self.app is not None
+                    and self.app.running
+                    and protocol is not None
+                    and protocol.is_audio_channel_opened()
+                    and self._should_send_microphone_audio()
+                ):
+                    await protocol.send_audio(encoded_data)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+            finally:
+                queue.task_done()
 
     def _should_send_microphone_audio(self) -> bool:
         """

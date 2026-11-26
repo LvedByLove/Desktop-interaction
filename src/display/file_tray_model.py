@@ -11,6 +11,8 @@
 QQuickImageProvider 跨版本虚方法签名不稳定的问题。
 """
 
+import os
+
 from PySide6.QtCore import (
     QAbstractListModel,
     QModelIndex,
@@ -19,6 +21,24 @@ from PySide6.QtCore import (
 )
 
 from .file_thumbnail_provider import FileIconProvider
+
+# 拖入保护上限：一次拖入过多会让模型插入、缩略图任务和 QML Repeater 同时膨胀；
+# 超过时整批拒绝并提示。正常几十个不受影响，可按需调整。
+MAX_FILES_PER_DROP = 50
+MAX_TRAY_FILES = 80
+
+
+def _path_key(path):
+    """去重用的规范化路径键。
+
+    同一文件可能以不同写法抵达：OLE 原生拖放给出 ``C:\\dir\\a.txt``，
+    而 QML DropArea 经 ``QUrl.toLocalFile()`` 给出 ``C:/dir/a.txt``。
+    直接按字符串比较会把它们当成两个条目，因此统一分隔符与大小写。
+    """
+    try:
+        return os.path.normcase(os.path.normpath(str(path)))
+    except Exception:
+        return str(path)
 
 
 class FileTrayModel(QAbstractListModel):
@@ -35,6 +55,8 @@ class FileTrayModel(QAbstractListModel):
 
     # 内容变化通知（供 QML 刷新尺寸 / 空态自动关闭）
     changed = Signal()
+    # 超量拖入被整批拒绝时发出提示文本（由 GUI 层显示警告）
+    dropRejected = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -99,14 +121,53 @@ class FileTrayModel(QAbstractListModel):
 
     # --- 增删改 ---
 
-    def add_paths(self, paths):
-        """新增路径（自动去重、保持插入顺序）。返回实际新增的路径列表。"""
-        existing = set(self._paths)
+    def _unique_new_paths(self, paths):
+        """返回去重后、当前模型里尚不存在的路径（不修改模型）."""
+        existing = {_path_key(p) for p in self._paths}
         added = []
-        for p in paths:
-            if p and p not in existing:
-                existing.add(p)
-                added.append(p)
+        for p in paths or []:
+            if not p:
+                continue
+            key = _path_key(p)
+            if key in existing:
+                continue
+            existing.add(key)
+            added.append(p)
+        return added
+
+    def drop_limit_message(self, paths) -> str | None:
+        """检查一次拖入是否超限；超限返回提示文本，否则返回 None.
+
+        只按“实际新增（去重后）”计数：重复拖入已在托盘内的文件不会误报。
+        """
+        new_paths = self._unique_new_paths(list(paths or []))
+        if len(new_paths) > MAX_FILES_PER_DROP:
+            return (
+                f"一次最多拖入 {MAX_FILES_PER_DROP} 个项目，"
+                f"本次 {len(new_paths)} 个已取消，请分批拖入"
+            )
+        if len(self._paths) + len(new_paths) > MAX_TRAY_FILES:
+            return (
+                f"中转站最多容纳 {MAX_TRAY_FILES} 个项目"
+                f"（当前 {len(self._paths)} 个），"
+                f"本次 {len(new_paths)} 个已取消，请先清理已暂存项目"
+            )
+        return None
+
+    def add_paths(self, paths):
+        """新增路径（自动去重、保持插入顺序）。返回实际新增的路径列表。
+
+        去重按规范化路径比较，能识别同一文件的不同书写形式
+        （如 ``C:\\a\\b.txt`` 与 ``C:/a/b.txt``）。
+        超过单次/总量上限时整批拒绝，并通过 ``dropRejected`` 发出提示。
+        """
+        paths = list(paths or [])
+        warning = self.drop_limit_message(paths)
+        if warning:
+            self.dropRejected.emit(warning)
+            return []
+
+        added = self._unique_new_paths(paths)
         if not added:
             return []
 

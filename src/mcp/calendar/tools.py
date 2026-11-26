@@ -26,22 +26,25 @@ async def create_event(args: Dict[str, Any]) -> str:
         category = args.get("category", "默认")
         reminder_minutes = args.get("reminder_minutes", 15)
 
-        # 如果没有结束时间，根据分类智能设置默认时长
-        if not end_time:
-            start_dt = datetime.fromisoformat(start_time)
+        start_dt = datetime.fromisoformat(start_time)
 
+        # 提醒类日程是"时间点"而非时段：开始时刻即结束时刻，
+        # 到点弹出一次提示即可，不占用 5 分钟等时间区间。
+        is_reminder = category == "提醒"
+        if is_reminder:
+            end_time = start_time
+        elif not end_time:
             # 根据分类设置不同的默认时长
-            if category in ["提醒", "休息", "站立"]:
+            if "提醒" in title.lower():
+                # 标题是提醒，但分类未填：同样按时间点处理
+                end_dt = start_dt
+            elif category in ["休息", "站立"]:
                 # 短时间活动：5分钟
                 end_dt = start_dt + timedelta(minutes=5)
             elif category in ["会议", "工作"]:
                 # 工作相关：1小时
                 end_dt = start_dt + timedelta(hours=1)
-            elif (
-                "提醒" in title.lower()
-                or "站立" in title.lower()
-                or "休息" in title.lower()
-            ):
+            elif "站立" in title.lower() or "休息" in title.lower():
                 # 根据标题判断：短时间活动
                 end_dt = start_dt + timedelta(minutes=5)
             else:

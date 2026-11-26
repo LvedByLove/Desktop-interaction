@@ -16,8 +16,6 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote, urlparse
 
-import requests
-
 from src.utils.logging_config import get_logger
 from src.utils.resource_finder import get_music_cache_dir
 
@@ -91,6 +89,9 @@ def load_music_config() -> dict[str, Any]:
 async def _fetch_json(
     url: str, headers: dict[str, str], *, timeout: int = 15
 ) -> Optional[Any]:
+    # 延迟导入：requests/urllib3 约占 200ms 启动成本，只有真正联网时才需要。
+    import requests
+
     try:
         response = await asyncio.to_thread(
             requests.get, url, headers=headers, timeout=timeout
@@ -328,6 +329,8 @@ def find_cached_song(song_id: str) -> Optional[Path]:
 def _sync_download(
     media_url: str, headers: dict, temp_path: Path, cache_path: Path
 ) -> Path:
+    import requests
+
     last_error: Optional[Exception] = None
     for attempt in range(3):
         try:
@@ -447,6 +450,8 @@ def _sync_fetch_kuwo_lyrics(
     酷我移动端接口需要先访问站点首页拿到会话 Cookie，否则容易返回
     status=301「音乐查询失败」；即使拿到 Cookie 也可能随机失败，因此重试几次。
     """
+    import requests
+
     session = requests.Session()
     session.headers.update(dict(headers or _HEADERS))
     try:
@@ -494,6 +499,8 @@ def _sync_fetch_lrclib_lyrics(
     title: str, artist: str, duration: float
 ) -> list[tuple[float, str]]:
     """从 LRCLIB 获取带时间轴的歌词（酷我接口失败时的备用源）."""
+    import requests
+
     if not title:
         return []
 

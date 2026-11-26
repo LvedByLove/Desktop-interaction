@@ -20,6 +20,16 @@ class WakeWordPlugin(Plugin):
     async def setup(self, app: Any) -> None:
         self.app = app
         try:
+            # 先看配置：默认关闭唤醒词时不要导入 sherpa_onnx / 初始化模型。
+            from src.utils.config_manager import ConfigManager
+
+            if not ConfigManager.get_instance().get_config(
+                "WAKE_WORD_OPTIONS.USE_WAKE_WORD", False
+            ):
+                logger.info("唤醒词功能已禁用，跳过检测器初始化")
+                self.detector = None
+                return
+
             from src.audio_processing.wake_word_detect import WakeWordDetector
 
             self.detector = WakeWordDetector()

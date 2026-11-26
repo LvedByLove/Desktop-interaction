@@ -20,10 +20,10 @@ from src.plugins.calendar import CalendarPlugin
 from src.plugins.iot import IoTPlugin
 from src.plugins.manager import PluginManager
 from src.plugins.mcp import McpPlugin
+from src.plugins.media_session import MediaSessionPlugin
 from src.plugins.shortcuts import ShortcutsPlugin
 from src.plugins.ui import UIPlugin
 from src.plugins.wake_word import WakeWordPlugin
-from src.protocols.mqtt_protocol import MqttProtocol
 from src.protocols.websocket_protocol import WebsocketProtocol
 from src.utils.config_manager import ConfigManager
 from src.utils.logging_config import get_logger
@@ -117,16 +117,18 @@ class Application:
             # 插件：setup（延迟导入AudioPlugin，确保上面setup_opus已执行）
             from src.plugins.audio import AudioPlugin
 
-            # 注册音频、UI、MCP、IoT、唤醒词、快捷键与日程插件（UI模式从run参数传入）
-            # 插件会自动按 priority 排序：
+            # 注册音频、UI、MCP、IoT、唤醒词、快捷键、日程与媒体会话插件
+            # （UI模式从run参数传入）。插件会自动按 priority 排序：
             # AudioPlugin(10) -> McpPlugin(20) -> WakeWordPlugin(30) -> CalendarPlugin(40)
-            # -> IoTPlugin(50) -> UIPlugin(60) -> ShortcutsPlugin(70)
+            # -> MediaSessionPlugin(45) -> IoTPlugin(50) -> UIPlugin(60)
+            # -> ShortcutsPlugin(70)
             self.plugins.register(
                 McpPlugin(),
                 IoTPlugin(),
                 AudioPlugin(),
                 WakeWordPlugin(),
                 CalendarPlugin(),
+                MediaSessionPlugin(),
                 UIPlugin(mode=mode),
                 ShortcutsPlugin(),
             )
@@ -197,6 +199,10 @@ class Application:
     def _set_protocol(self, protocol_type: str) -> None:
         logger.debug("设置协议类型: %s", protocol_type)
         if protocol_type == "mqtt":
+            # 延迟导入：paho + cryptography 约 100ms 启动成本，
+            # 默认使用 websocket 时完全不需要加载。
+            from src.protocols.mqtt_protocol import MqttProtocol
+
             self.protocol = MqttProtocol(asyncio.get_running_loop())
         else:
             self.protocol = WebsocketProtocol()
@@ -516,17 +522,19 @@ class Application:
     def _on_incoming_audio(self, data: bytes):
         # 唤醒会话中持续收到服务端音频，说明对话仍在进行（避免长回答被超时截断）
         self.mark_wake_conversation_activity()
-        logger.debug(f"收到二进制消息，长度: {len(data)}")
+        logger.debug("收到二进制消息，长度: %s", len(data))
         # 转发给插件
         self.spawn(self.plugins.notify_incoming_audio(data), "plugin:on_audio")
 
     def _on_incoming_json(self, json_data):
         try:
             msg_type = json_data.get("type") if isinstance(json_data, dict) else None
-            logger.info(f"收到JSON消息: type={msg_type}")
+            # 逐条消息的 INFO 会同步写控制台+文件，对话期间高频刷盘会卡事件循环；
+            # 需要排查时把日志级别调到 DEBUG 即可看到每条消息类型。
+            logger.debug("收到JSON消息: type=%s", msg_type)
             # 服务端告警/错误：把完整内容记下来，否则只看到 type 无从排查
             if msg_type in ("alert", "error"):
-                logger.warning(f"服务端告警消息: {json_data}")
+                logger.warning("服务端告警消息: %s", json_data)
             # 唤醒会话中：收到识别结果/大模型消息说明对话仍在进行，续期超时
             if msg_type == "stt" and json_data.get("text"):
                 self._wake_user_spoke = True

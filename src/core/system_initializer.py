@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from typing import Dict
 
@@ -181,10 +182,12 @@ class SystemInitializer:
 
             # 显示获取到的配置信息摘要
             response_data = config_result["response_data"]
-            # 详细配置信息仅在调试模式下显示
-            logger.debug(
-                f"OTA响应数据: {json.dumps(response_data, indent=2, ensure_ascii=False)}"
-            )
+            # 详细配置信息仅在调试模式下序列化/显示
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "OTA响应数据: %s",
+                    json.dumps(response_data, indent=2, ensure_ascii=False),
+                )
 
             if "websocket" in response_data:
                 ws_info = response_data["websocket"]

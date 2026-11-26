@@ -95,19 +95,18 @@ class CalendarReminderService:
         try:
             now = datetime.now()
 
-            # 查询所有未发送提醒且提醒时间已到的事件
-            # 同时确保事件还没有过期（开始时间在当前时间之后或者在合理的过期时间内）
+            # 到点提醒：日程开始时刻才触发（不再按 reminder_minutes 提前）。
+            # 保留 15 分钟容错窗口，用于覆盖程序休眠 / 短暂卡顿。
             with self.db._get_connection() as conn:
                 cursor = conn.execute(
                     """
                     SELECT * FROM events
                     WHERE reminder_sent = 0
-                    AND reminder_time IS NOT NULL
-                    AND reminder_time <= ?
+                    AND start_time <= ?
                     AND start_time > ?
-                    ORDER BY reminder_time
+                    ORDER BY start_time
                 """,
-                    (now.isoformat(), (now - timedelta(hours=1)).isoformat()),
+                    (now.isoformat(), (now - timedelta(minutes=15)).isoformat()),
                 )
 
                 pending_reminders = cursor.fetchall()
@@ -135,21 +134,23 @@ class CalendarReminderService:
             description = event_data.get("description", "")
             category = event_data.get("category", "默认")
 
-            # 计算距离开始时间
+            # 到点提醒：开始时刻已到，计算已经过了一分钟还是更久
             start_dt = datetime.fromisoformat(start_time)
             now = datetime.now()
-            time_until = start_dt - now
+            elapsed = now - start_dt
+            end_dt = self._parse_time(event_data.get("end_time"))
+            # 兼容旧数据：提醒分类一律按时间点处理，不展示时段
+            is_point = (
+                end_dt is None
+                or end_dt <= start_dt
+                or str(category).strip() == "提醒"
+            )
 
-            if time_until.total_seconds() > 0:
-                hours = int(time_until.total_seconds() // 3600)
-                minutes = int((time_until.total_seconds() % 3600) // 60)
-
-                if hours > 0:
-                    time_str = f"{hours}小时{minutes}分钟后"
-                else:
-                    time_str = f"{minutes}分钟后"
-            else:
+            if elapsed.total_seconds() < 60:
                 time_str = "现在"
+            else:
+                minutes = int(elapsed.total_seconds() // 60)
+                time_str = f"{minutes}分钟前"
 
             # 构建提醒消息
             reminder_message = {
@@ -158,12 +159,14 @@ class CalendarReminderService:
                     "id": event_id,
                     "title": title,
                     "start_time": start_time,
+                    "end_time": event_data.get("end_time", ""),
                     "description": description,
                     "category": category,
                     "time_until": time_str,
+                    "point": is_point,
                 },
                 "message": self._format_reminder_text(
-                    title, time_str, category, description
+                    title, time_str, category, description, is_point
                 ),
             }
 
@@ -185,22 +188,30 @@ class CalendarReminderService:
             logger.error(f"发送提醒失败: {e}", exc_info=True)
 
     def _format_reminder_text(
-        self, title: str, time_str: str, category: str, description: str
+        self,
+        title: str,
+        time_str: str,
+        category: str,
+        description: str,
+        is_point: bool = False,
     ) -> str:
         """
         格式化提醒文本.
+
+        提醒内容直接使用 AI 创建日程时给出的标题/备注，代码不再拼接
+        "日程提醒："、"【分类】"等前缀——是否带"提醒"字样由 AI 自己决定。
         """
-        # 基本提醒信息
-        if time_str == "现在":
-            message = f"【{category}】日程提醒：{title} 即将开始"
-        else:
-            message = f"【{category}】日程提醒：{title} 将在{time_str}开始"
-
-        # 添加描述信息
+        message = str(title or "").strip()
         if description:
-            message += f"，备注：{description}"
-
+            message += f"，{description}"
         return message
+
+    @staticmethod
+    def _parse_time(value):
+        try:
+            return datetime.fromisoformat(str(value))
+        except Exception:
+            return None
 
     async def _mark_reminder_sent(self, event_id: str):
         """

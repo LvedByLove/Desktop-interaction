@@ -25,6 +25,7 @@ Desktop-interaction/
 │   │   ├── file_tray_model.py    # 文件中转站数据源与图标角色
 │   │   ├── file_thumbnail_provider.py # Shell 内容缩略图：后台取图 + 回退 + 缓存
 │   │   ├── file_tray_window.qml  # 中转站面板 QML
+│   │   ├── media_control_model.py # 右键展开的播放面板数据模型
 │   │   └── region_capture_overlay.py  # 屏幕区域框选截图浮层
 │   ├── iot/                      # IoT 设备抽象（Thing / Property / Method）与设备管理
 │   │   └── things/               # 具体设备实现（如 lamp 台灯）
@@ -33,12 +34,13 @@ Desktop-interaction/
 │   │   ├── calendar/             # 日程与提醒
 │   │   ├── camera/               # 摄像头与视觉识别
 │   │   ├── file_tools/           # 文件操作
+│   │   ├── media/                # 系统媒体会话（SMTC）：外部播放器读取/控制 + 歌词
 │   │   ├── music/                # 在线 / 本地音乐播放
 │   │   ├── screenshot/           # 截图
 │   │   ├── system/               # 系统控制（音量等）
 │   │   └── timer/                # 定时器
 │   ├── network/                  # MQTT 客户端
-│   ├── plugins/                  # 插件系统与各功能插件（音频 / UI / MCP / IoT / 快捷键 / 唤醒词 / 日历）
+│   ├── plugins/                  # 插件系统与各功能插件（音频 / UI / MCP / IoT / 快捷键 / 唤醒词 / 日历 / 媒体会话）
 │   ├── protocols/                # 通信协议：WebSocket / MQTT
 │   ├── utils/                    # 通用工具：配置、日志、资源查找、音量 / 亮度、设备激活、Qt 兼容等
 │   └── views/                    # PySide6 窗口与界面

@@ -44,6 +44,12 @@ class CalendarDatabase:
         os.makedirs(os.path.dirname(self.db_file), exist_ok=True)
 
         with self._get_connection() as conn:
+            # WAL：提醒轮询/UI 查询与写入并发时不再互相阻塞（持久化到数据库文件）
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+            except sqlite3.DatabaseError as e:
+                logger.debug("启用 WAL 失败，继续使用默认日志模式: %s", e)
+
             # 创建事件表
             conn.execute(
                 """
@@ -80,6 +86,17 @@ class CalendarDatabase:
                     "INSERT OR IGNORE INTO categories (name) VALUES (?)", (category,)
                 )
 
+            # 索引：提醒轮询按 (reminder_sent, start_time) 过滤，日历查询按 start_time
+            # 排序；没有索引时事件表增长后每次都会全表扫描 + 临时排序。
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_start "
+                "ON events(start_time)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_reminder "
+                "ON events(reminder_sent, start_time)"
+            )
+
             conn.commit()
 
             # 检查并添加新字段（数据库升级）
@@ -96,6 +113,9 @@ class CalendarDatabase:
         try:
             conn = sqlite3.connect(self.db_file)
             conn.row_factory = sqlite3.Row  # 使结果可以按列名访问
+            # 提醒服务与 UI 会并发访问；WAL + NORMAL 下减少 fsync 与锁等待。
+            conn.execute("PRAGMA busy_timeout=3000")
+            conn.execute("PRAGMA synchronous=NORMAL")
             yield conn
         except Exception as e:
             if conn:
@@ -180,6 +200,36 @@ class CalendarDatabase:
                 return events
         except Exception as e:
             logger.error(f"获取事件失败: {e}")
+            return []
+
+    def get_events_overlapping(
+        self, start_date: str = None, end_date: str = None
+    ) -> List[Dict[str, Any]]:
+        """查询与 [start_date, end_date] 有重叠的事件.
+
+        与 ``get_events`` 只按开始时间过滤不同，这里用
+        ``start_time <= end AND end_time >= start``，因此跨天事件会出现在
+        它覆盖的每一天里（月历圆点和当日列表都依赖这个语义）。
+        """
+        try:
+            with self._get_connection() as conn:
+                query = "SELECT * FROM events WHERE 1=1"
+                params = []
+
+                if end_date:
+                    query += " AND start_time <= ?"
+                    params.append(end_date)
+
+                if start_date:
+                    query += " AND (end_time IS NULL OR end_time = '' OR end_time >= ?)"
+                    params.append(start_date)
+
+                query += " ORDER BY start_time"
+
+                cursor = conn.execute(query, params)
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"按时间范围查询事件失败: {e}")
             return []
 
     def update_event(self, event_id: str, **kwargs) -> bool:

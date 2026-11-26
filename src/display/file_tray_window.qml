@@ -45,9 +45,12 @@ Rectangle {
     property bool trayVisible: false   // 中转站面板
     property bool wakeReady: false     // 全局拖拽中：就绪等待拖入
     property bool fileDropArmed: false // 已通过拖放条激活，面板内可继续放置
+    // 最近一次打开面板的时间：用于忽略 Drop 同一瞬间触发的 DropArea.onExited
+    property real trayShownAt: 0
+    // 超量拖入等警告：短暂显示在面板底部
+    property string warningText: ""
 
-    Behavior on width { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
-    Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
+    // 窗口几何由 Python 侧 QPropertyAnimation 驱动，QML 侧不再重复动画 width/height
     Behavior on radius { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
 
     // 唤醒薄条文字的显隐进度：从待机短横线变形时，文字后于几何展开淡入
@@ -185,6 +188,7 @@ Rectangle {
         beginLineMorph()
         wakeReady = false
         fileDropArmed = false
+        warningText = ""
         wakeTextReveal.stop()
         wakeTextHide.stop()
         root.wakeTextOpacity = 1
@@ -198,6 +202,7 @@ Rectangle {
         wakeVisible = false
         wakeReady = false
         fileDropArmed = false
+        warningText = ""
     }
 
     // 窗口退出：淡出并轻微收缩，完成后由 fadeOutDone 通知 Python 隐藏
@@ -268,7 +273,16 @@ Rectangle {
         root.wakeTextOpacity = 0
         trayVisible = true
         fileDropArmed = true
+        trayShownAt = Date.now()
         refreshSize()
+    }
+
+    // 超量拖入警告：显示 3.5 秒；若面板未展开则先展开
+    function showWarning(message) {
+        warningText = String(message || "")
+        if (warningText.length === 0) return
+        warningClearTimer.restart()
+        if (!trayVisible) openFileTray()
     }
 
     function closeFileTray() {
@@ -284,6 +298,7 @@ Rectangle {
         wakeVisible = true
         wakeReady = true
         fileDropArmed = false
+        warningText = ""
         wakeTextReveal.stop()
         wakeTextHide.stop()
         root.wakeTextOpacity = 1
@@ -532,20 +547,25 @@ Rectangle {
                         width: cellSize
                         height: cellSize
                         opacity: 0
-                        Behavior on opacity { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
 
-                        // 逐个错峰淡入，让中转站填充更有层次
-                        Timer {
-                            interval: Math.min(index * 25, 250)
-                            repeat: false
+                        // 逐个错峰淡入，让中转站填充更有层次。
+                        // 用声明式动画替代每个 delegate 一个 QTimer。
+                        SequentialAnimation on opacity {
                             running: true
-                            onTriggered: trayItem.opacity = 1
+                            // delegate 销毁/模型重置时 index 可能短暂为 -1
+                            PauseAnimation { duration: Math.max(0, Math.min(index * 25, 250)) }
+                            NumberAnimation {
+                                to: 1
+                                duration: 200
+                                easing.type: Easing.OutCubic
+                            }
                         }
 
                         Column {
                             anchors.centerIn: parent
                             spacing: 2
 
+                            // 无边框：选中时仅以淡色底作为反馈，图标本身占据整个区域
                             Rectangle {
                                 width: 40
                                 height: 40
@@ -554,18 +574,15 @@ Rectangle {
                                 color: model.selected
                                     ? Qt.rgba(37/255, 99/255, 235/255, 0.12)
                                     : "transparent"
-                                border.color: model.selected
-                                    ? root.accentColor
-                                    : "#dfe3e8"
-                                border.width: model.selected ? 2 : 1
+                                border.width: 0
 
                                 Image {
-                                    anchors.centerIn: parent
-                                    width: 30
-                                    height: 30
+                                    anchors.fill: parent
                                     source: model.icon
                                     fillMode: Image.PreserveAspectFit
-                                    smooth: true
+                                    asynchronous: true
+                                    // 以最终显示尺寸解码，避免先解 96px 再缩到 40px
+                                    sourceSize: Qt.size(40, 40)
                                 }
                             }
 
@@ -676,6 +693,9 @@ Rectangle {
         }
 
         onExited: {
+            // Drop 与 onExited 的先后顺序不稳定；面板刚展开的 800ms 内
+            // 不把它收回短横线，避免“文件已加入但界面消失”。
+            if (Date.now() - root.trayShownAt < 800) return
             if (root.trayVisible && fileTrayRepeater.count === 0) {
                 root.returnToWake()
             }
@@ -712,6 +732,47 @@ Rectangle {
             if (root.trayVisible && fileTrayRepeater.count === 0) {
                 root.closeFileTray()
             }
+        }
+    }
+
+    Timer {
+        id: warningClearTimer
+        interval: 3500
+        repeat: false
+        onTriggered: {
+            root.warningText = ""
+            // 空面板上的拒绝提示结束后，再走一次空态自动收起
+            if (root.trayVisible && fileTrayRepeater.count === 0) {
+                trayEmptyAutoCloseTimer.restart()
+            }
+        }
+    }
+
+    // 超量拖入警告：覆盖在面板底部，不参与布局、不改变面板高度
+    Rectangle {
+        id: warningBanner
+        z: 200
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 10
+        width: Math.max(200, Math.min(parent.width - 32, 520))
+        height: warningLabel.implicitHeight + 16
+        radius: 10
+        visible: root.warningText.length > 0 && root.trayVisible
+        color: "#fdecec"
+        border.color: "#f0b4b4"
+        border.width: 1
+
+        Text {
+            id: warningLabel
+            anchors.centerIn: parent
+            width: Math.max(0, parent.width - 24)
+            text: root.warningText
+            font.family: "Microsoft YaHei UI"
+            font.pixelSize: 11
+            color: "#b42323"
+            wrapMode: Text.WordWrap
+            horizontalAlignment: Text.AlignHCenter
         }
     }
 

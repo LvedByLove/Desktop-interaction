@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import socket
 import ssl
 
@@ -155,11 +156,12 @@ class Ota:
                     # 解析JSON数据
                     response_data = await response.json()
 
-                    # 调试信息：打印完整的OTA响应
-                    self.logger.debug(
-                        f"OTA服务器返回数据: "
-                        f"{json.dumps(response_data, indent=4, ensure_ascii=False)}"
-                    )
+                    # 调试信息：打印完整的OTA响应（仅在 DEBUG 打开时才序列化）
+                    if self.logger.isEnabledFor(logging.DEBUG):
+                        self.logger.debug(
+                            "OTA服务器返回数据: %s",
+                            json.dumps(response_data, indent=4, ensure_ascii=False),
+                        )
 
                     return response_data
 
