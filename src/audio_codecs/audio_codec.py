@@ -32,6 +32,18 @@ _MAX_OUTPUT_FRAMES = 500
 # 音频回调状态异常的最小告警间隔（秒）：避免 xrun 时每帧同步写日志。
 _STREAM_STATUS_LOG_INTERVAL = 5.0
 
+# 输出流回调块的最小长度（毫秒）。
+# 设备原生帧长通常是 20ms，Python 回调只要被 GIL 拖住超过一个帧长就会
+# 触发 PortAudio underflow。启动阶段插件初始化、拖放时缩略图/文件处理
+# 都会短暂占用主线程，因此把输出回调块放宽到至少 40ms 留出余量；服务端
+# 协议帧仍是 AudioConfig.FRAME_DURATION，不影响 TTS / 音乐的帧对齐。
+_OUTPUT_BLOCKSIZE_MIN_MS = 40
+
+# 输出流启动后的预热期（秒）：这段时间内插件初始化、资源加载会短暂占用
+# 主线程，首个音频回调偶发错过 deadline 属于正常现象；此时还没有播放任何
+# 音频，underflow 不影响听感，因此只记 DEBUG，不刷 WARNING。
+_STREAM_STATUS_STARTUP_GRACE = 2.0
+
 
 class _SampleBuffer:
     """实时重采样缓冲：按 ndarray 块累积，避免逐样本 popleft。
@@ -193,6 +205,7 @@ class AudioCodec:
         # 且不会像 asyncio.Queue 那样在跨线程 get_nowait 时操作 loop Future。
         self._output_buffers = {channel: deque() for channel in OUTPUT_CHANNELS}
         self._last_status_log_at = 0.0
+        self._output_stream_started_at = 0.0
         self._output_drop_count = 0
         self._output_drop_log_at = 0.0
 
@@ -740,6 +753,17 @@ class AudioCodec:
         if self._need_output_upmix:
             logger.info(f"输出声道上混: 1ch → {self.output_channels}ch")
 
+    def _output_blocksize(self) -> int:
+        """输出流回调块大小（帧）：在设备原生帧长基础上放宽到至少 40ms.
+
+        协议帧仍按 20ms 生产/消费，这里只是 PortAudio 一次回调取多少帧，
+        不影响 TTS / 音乐的时间线，仅增加约一个块的输出延迟。
+        """
+        native = int(self._device_output_frame_size or 0)
+        sample_rate = int(self.device_output_sample_rate or 0)
+        relaxed = int(sample_rate * (_OUTPUT_BLOCKSIZE_MIN_MS / 1000.0))
+        return max(native, relaxed, 1)
+
     async def _create_streams(self):
         """
         创建音频流（完全使用设备原生格式）
@@ -758,13 +782,14 @@ class AudioCodec:
                 samplerate=self.device_output_sample_rate,  # 设备原生采样率
                 channels=self.output_channels,  # 设备原生声道数
                 dtype=np.float32,
-                blocksize=self._device_output_frame_size,  # 设备原生帧大小
+                blocksize=self._output_blocksize(),  # 至少 40ms，容忍 GIL 争用
                 callback=self._output_callback,
                 finished_callback=self._output_finished_callback,
                 latency="low",
             )
 
             self.output_stream.start()
+            self._output_stream_started_at = time.monotonic()
 
             # 设备名探测走 COM，放到线程里，避免阻塞事件循环
             self._bound_output_name = await asyncio.to_thread(
@@ -868,7 +893,14 @@ class AudioCodec:
         输出回调：服务端协议格式 → 设备原生格式 转换流程：24kHz单声道 → 重采样+上混 → 多声道/高采样率.
         """
         if status:
-            self._log_stream_status(status, "输出")
+            if (
+                time.monotonic() - self._output_stream_started_at
+                < _STREAM_STATUS_STARTUP_GRACE
+            ):
+                # 启动预热期内的 xrun：尚未开始播放，不打扰用户
+                logger.debug("输出流启动预热期状态: %s", status)
+            else:
+                self._log_stream_status(status, "输出")
 
         # 关闭流程中直接回填静音并返回，避免在 stop/close 与置空输出流、清理
         # 重采样器之间存在 TOCTOU 竞态窗口：PortAudio 可能在流停止后仍触发一次
@@ -1264,12 +1296,13 @@ class AudioCodec:
                     samplerate=self.device_output_sample_rate,
                     channels=self.output_channels,
                     dtype=np.float32,
-                    blocksize=self._device_output_frame_size,
+                    blocksize=self._output_blocksize(),
                     callback=self._output_callback,
                     finished_callback=self._output_finished_callback,
                     latency="low",
                 )
                 self.output_stream.start()
+                self._output_stream_started_at = time.monotonic()
                 self._bound_output_name = await asyncio.to_thread(
                     self._get_live_default_output_name
                 )
@@ -1454,7 +1487,7 @@ class AudioCodec:
                 samplerate=self.device_output_sample_rate,
                 channels=self.output_channels,
                 dtype=np.float32,
-                blocksize=self._device_output_frame_size,
+                blocksize=self._output_blocksize(),
                 callback=self._output_callback,
                 finished_callback=self._output_finished_callback,
                 latency="low",
@@ -1462,6 +1495,7 @@ class AudioCodec:
             if self.input_stream is not None:
                 self.input_stream.start()
             self.output_stream.start()
+            self._output_stream_started_at = time.monotonic()
         except Exception as e:
             logger.error(f"重新初始化音频流失败: {e}")
 

@@ -25,6 +25,10 @@ if sys.platform == "win32":
 # 统一使用可定制的 Basic 样式。
 os.environ["QT_QUICK_CONTROLS_STYLE"] = "Basic"
 
+# 让 Qt 在 qWarning/qCritical 里附带源码文件与行号（release 版默认省略）。
+# 这些信息只会进入我们的 Qt 消息处理器，便于定位 QQuickWidget 内部告警。
+os.environ.setdefault("QT_MESSAGELOGCONTEXT", "1")
+
 _single_instance_lock = None
 
 # 单实例运行检测
@@ -96,7 +100,12 @@ def check_single_instance(wait_seconds: float = 0.0) -> bool:
 
 
 from src.application import Application
-from src.utils.logging_config import get_logger, setup_logging, stop_logging
+from src.utils.logging_config import (
+    get_logger,
+    install_qt_message_handler,
+    setup_logging,
+    stop_logging,
+)
 
 
 def wait_for_parent_exit(parent_pid: int) -> bool:
@@ -312,6 +321,10 @@ if __name__ == "__main__":
             except ImportError as e:
                 logger.error(f"GUI模式需要qasync和PySide6库: {e}")
                 sys.exit(1)
+
+            # 接管 Qt 自身的 qWarning/qCritical：带上时间戳和线程名写入
+            # app.log，便于定位 QQuickRenderControl 等 Qt 内部告警。
+            install_qt_message_handler()
 
             qt_app = QApplication.instance() or QApplication(sys.argv)
 

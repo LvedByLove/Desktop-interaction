@@ -1203,6 +1203,8 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         root_object = self.tray_qml.rootObject() if self.tray_qml else None
         was_visible = self.tray_root.isVisible()
         if not was_visible:
+            # 诊断标记：与 Qt 告警时间戳对照，判断是否由窗口首次显示触发
+            self.logger.info("中转站窗口显示")
             if root_object and hasattr(root_object, "appear"):
                 try:
                     root_object.appear()
@@ -1246,6 +1248,8 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
                     return
             except RuntimeError:
                 pass
+        if self.tray_root.isVisible():
+            self.logger.info("中转站窗口隐藏（淡出完成）")
         self.tray_root.hide()
 
     def _hide_tray_window_if_idle(self):
@@ -1277,6 +1281,7 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         self._tray_target_rect = QRect(new_x, new_y, width, height)
         # 新的尺寸请求优先于尚未完成的“收回短横线”，避免展开完成时被误隐藏
         self._tray_collapse_pending = False
+        self.logger.info(f"中转站窗口尺寸请求 {width}x{height}")
         self._animate_tray_geometry(self._tray_target_rect, 220)
 
     def _animate_tray_geometry(self, target_rect: QRect, duration: int = 220) -> bool:
@@ -1326,6 +1331,8 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
             return
         self._tray_collapse_pending = False
         if self.tray_root:
+            if self.tray_root.isVisible():
+                self.logger.info("中转站窗口隐藏（收起完成）")
             self.tray_root.hide()
 
     def _finish_tray_close_animation(self):
@@ -1333,6 +1340,8 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
         self._tray_close_stage = None
         self._tray_collapse_pending = False
         if self.tray_root:
+            if self.tray_root.isVisible():
+                self.logger.info("中转站窗口隐藏（收拢到横条）")
             self.tray_root.hide()
 
     # ---- 待机短横线 → 唤醒薄条 的变形 ----
@@ -1998,9 +2007,15 @@ class GuiDisplay(BaseDisplay, QObject, metaclass=CombinedMeta):
                     self._ole_catcher.hide()
                 except Exception as e:
                     self.logger.warning(f"暂停 OLE 捕捉窗口失败: {e}")
+            self.logger.info(f"开始从中转站拖出 {len(drag_paths)} 个项目")
             try:
                 drag.exec(Qt.CopyAction | Qt.MoveAction, Qt.CopyAction)
             finally:
+                try:
+                    performed = drag.action()
+                except Exception:
+                    performed = None
+                self.logger.info(f"中转站拖出结束 (action={performed})")
                 self._internal_drag = False
                 if self._ole_catcher:
                     try:

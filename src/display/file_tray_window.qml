@@ -10,6 +10,11 @@ Rectangle {
     readonly property color primaryTextColor: "#111827"
     readonly property color secondaryTextColor: "#6b7280"
     readonly property color surfaceHoverColor: "#e8ebef"
+    // 同色但全透明：用于悬停淡入淡出的起点/终点。
+    // 若直接与 "transparent"（rgba(0,0,0,0)）做 ColorAnimation，
+    // 插值会经过半透明黑色，出现一闪而过的深灰。
+    readonly property color surfaceHoverColorTransparent:
+        Qt.rgba(surfaceHoverColor.r, surfaceHoverColor.g, surfaceHoverColor.b, 0)
     readonly property color surfacePressedColor: "#d9dee5"
     readonly property color accentColor: "#2563eb"
 
@@ -38,6 +43,10 @@ Rectangle {
     property int wakeHeight: 16
     property int trayWidth: 600
     property int cellSize: 56
+    // 单元格高度：图标 40 + 文件名 10 + 大小 9 + 两段 2px 间距 = 63，
+    // 再加上选中底板 2px 描边的内边距。原先与宽度同为 56 时文字会溢出行距，
+    // 整格高亮也无法完整包住内容。
+    property int cellHeight: 68
     property int fileTrayColumns: 9
 
     // 两种显示形态独立可见性（与主胶囊 viewMode 解耦，二者可同时显示互不干扰）
@@ -220,7 +229,7 @@ Rectangle {
         var c = count()
         if (c === 0) return 72
         var rows = Math.ceil(c / fileTrayColumns)
-        return 40 + rows * cellSize + (rows - 1) * 8 + 14
+        return 40 + rows * cellHeight + (rows - 1) * 8 + 14
     }
 
     function fileBasename(path) {
@@ -511,7 +520,7 @@ Rectangle {
                         var rows = Math.ceil(root.count() / cols)
                         if (rows < 1) rows = 1
                         var cw = cols * cellSize + (cols - 1) * 8
-                        var ch = rows * cellSize + (rows - 1) * 8
+                        var ch = rows * cellHeight + (rows - 1) * 8
                         var ox = Math.max(0, (trayGrid.width - cw) / 2)
                         var oy = Math.max(0, (trayGrid.height - ch) / 2)
                         var x0 = x - ox
@@ -522,8 +531,8 @@ Rectangle {
                             var row = Math.floor(i / cols)
                             var col = i % cols
                             var ix = col * (cellSize + 8)
-                            var iy = row * (cellSize + 8)
-                            if (x0 < ix + cellSize && x0 + w > ix && y0 < iy + cellSize && y0 + h > iy)
+                            var iy = row * (cellHeight + 8)
+                            if (x0 < ix + cellSize && x0 + w > ix && y0 < iy + cellHeight && y0 + h > iy)
                                 idx.push(i)
                         }
                         return idx
@@ -545,7 +554,7 @@ Rectangle {
                     delegate: Item {
                         id: trayItem
                         width: cellSize
-                        height: cellSize
+                        height: cellHeight
                         opacity: 0
 
                         // 逐个错峰淡入，让中转站填充更有层次。
@@ -561,19 +570,35 @@ Rectangle {
                             }
                         }
 
+                        // 整格底板：选中时主色淡底 + 2px 主色描边，悬停时浅灰底，
+                        // 让「悬停」与「选中」两种状态一目了然。
+                        Rectangle {
+                            id: cellBackground
+
+                            anchors.fill: parent
+                            radius: 12
+                            color: model.selected
+                                ? Qt.rgba(37/255, 99/255, 235/255, 0.22)
+                                : (trayIconArea.containsMouse ? root.surfaceHoverColor : root.surfaceHoverColorTransparent)
+                            border.width: model.selected ? 2 : 0
+                            border.color: root.accentColor
+
+                            Behavior on color {
+                                ColorAnimation { duration: 140; easing.type: Easing.OutCubic }
+                            }
+                        }
+
                         Column {
                             anchors.centerIn: parent
                             spacing: 2
 
-                            // 无边框：选中时仅以淡色底作为反馈，图标本身占据整个区域
+                            // 图标容器不再单独绘制选中色，选中反馈统一由整格底板表达
                             Rectangle {
                                 width: 40
                                 height: 40
                                 radius: 10
                                 anchors.horizontalCenter: parent.horizontalCenter
-                                color: model.selected
-                                    ? Qt.rgba(37/255, 99/255, 235/255, 0.12)
-                                    : "transparent"
+                                color: "transparent"
                                 border.width: 0
 
                                 Image {
@@ -587,18 +612,23 @@ Rectangle {
                             }
 
                             Text {
-                                width: cellSize
+                                // 左右留出描边内边距，避免最长文件名贴住选中边框
+                                width: cellSize - 6
                                 text: root.fileBasename(model.path)
                                 font.family: "Microsoft YaHei UI"
                                 font.pixelSize: 8
-                                color: root.secondaryTextColor
+                                color: model.selected ? root.accentColor : root.secondaryTextColor
                                 horizontalAlignment: Text.AlignHCenter
                                 elide: Text.ElideMiddle
+
+                                Behavior on color {
+                                    ColorAnimation { duration: 140; easing.type: Easing.OutCubic }
+                                }
                             }
 
                             // 文件夹 / 文件大小 / 已移动（Shell 缩略图异步加载后填充）
                             Text {
-                                width: cellSize
+                                width: cellSize - 6
                                 text: model.meta ? model.meta : ""
                                 visible: text.length > 0
                                 font.family: "Microsoft YaHei UI"
@@ -622,8 +652,8 @@ Rectangle {
                             property real pressY: 0
 
                             ToolTip.visible: containsMouse && !dragStarted
+                            // 悬停提示只显示文件名，不附带容量/类型等 meta 信息
                             ToolTip.text: root.fileBasename(model.path)
-                                + (model.meta ? "\n" + model.meta : "")
                             ToolTip.delay: 300
 
                             onPressed: function (mouse) {

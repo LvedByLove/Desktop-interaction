@@ -20,6 +20,9 @@ _LEVEL_COLORS = {
 # 异步日志监听器（仅在 setup_logging() 后存在）
 _listener: QueueListener | None = None
 
+# 已安装的 Qt 消息处理器（保持引用，避免被回收）
+_qt_message_handler = None
+
 
 def stop_logging() -> None:
     """停止异步日志线程并刷出剩余日志（退出前调用）."""
@@ -270,6 +273,82 @@ def setup_logging():
         logging.warning("日志系统已初始化（仅控制台输出，文件日志不可用）")
 
     return log_file
+
+
+def install_qt_message_handler() -> bool:
+    """把 Qt 自身的告警接入项目日志系统.
+
+    Qt 默认把 qWarning/qCritical 直接写到 stderr，不进入 app.log，导致
+    ``QQuickRenderControl`` / ``QQuickWidget`` 这类 Qt 内部告警无法与
+    应用日志按时间对照。这里用 ``qInstallMessageHandler`` 接管：
+
+    - 只记录 Warning 及以上级别，避免 QML debug 输出刷屏；
+    - 交由项目的异步日志系统输出，自动带上时间戳、级别、线程名；
+    - 若 Qt 保留了消息上下文，会附带源码位置（release 构建可能为空）。
+
+    重复调用安全；PySide6 不可用时静默返回 False。
+    """
+    global _qt_message_handler
+    if _qt_message_handler is not None:
+        return True
+
+    try:
+        from PySide6.QtCore import QtMsgType, qInstallMessageHandler
+    except Exception:
+        return False
+
+    level_map = {
+        QtMsgType.QtDebugMsg: logging.DEBUG,
+        QtMsgType.QtInfoMsg: logging.INFO,
+        QtMsgType.QtWarningMsg: logging.WARNING,
+        QtMsgType.QtCriticalMsg: logging.ERROR,
+        QtMsgType.QtFatalMsg: logging.CRITICAL,
+    }
+    qt_logger = logging.getLogger("Qt")
+
+    def _decode(value) -> str:
+        if isinstance(value, bytes):
+            try:
+                return value.decode("utf-8", "replace")
+            except Exception:
+                return repr(value)
+        return str(value or "")
+
+    def _context_text(context) -> str:
+        try:
+            file = _decode(getattr(context, "file", "")).strip()
+            func = _decode(getattr(context, "function", "")).strip()
+            line = int(getattr(context, "line", 0) or 0)
+        except Exception:
+            return ""
+        if not file and not func:
+            return ""
+        text = file or "?"
+        if line:
+            text += f":{line}"
+        if func:
+            text += f" in {func}"
+        return f" [{text}]"
+
+    def handler(mode, context, message):
+        try:
+            level = level_map.get(mode, logging.WARNING)
+            # Qt 的 debug/info 通常很吵，这里统一不记录
+            if level < logging.WARNING:
+                return
+            qt_logger.log(
+                level,
+                "%s%s",
+                str(message).rstrip(),
+                _context_text(context),
+            )
+        except Exception:
+            # 日志处理器自身绝不能抛异常打断 Qt 渲染
+            pass
+
+    _qt_message_handler = handler
+    qInstallMessageHandler(handler)
+    return True
 
 
 def get_logger(name):
