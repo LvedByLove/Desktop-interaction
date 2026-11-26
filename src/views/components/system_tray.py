@@ -214,7 +214,7 @@ class SystemTray(QObject):
         self.is_connected = connected
 
         try:
-            tooltip = f"小智AI助手 - {status}"
+            tooltip = f"Desktop interaction{status}"
             self.tray_icon.setToolTip(tooltip)
 
         except Exception as e:

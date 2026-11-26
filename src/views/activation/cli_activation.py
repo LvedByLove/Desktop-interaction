@@ -213,7 +213,7 @@ class CLIActivation:
         print("=" * 60)
         print("设备已成功添加到您的账户")
         print("配置已自动更新")
-        print("准备启动小智AI客户端...")
+        print("准备启动Desktop interaction客户端...")
         print("=" * 60)
 
     def _print_activation_failure(self):

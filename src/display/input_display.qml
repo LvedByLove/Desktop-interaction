@@ -62,7 +62,7 @@ Rectangle {
             // 占位符文字
             Text {
                 anchors.fill: parent
-                text: "输入文字和小智对话..."
+                text: "输入文字对话..."
                 font.family: "Microsoft YaHei UI"
                 font.pixelSize: 15
                 color: Qt.rgba(255/255, 255/255, 255/255, 0.42)

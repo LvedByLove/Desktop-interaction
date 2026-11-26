@@ -159,7 +159,7 @@ def parse_args():
     """
     解析命令行参数.
     """
-    parser = argparse.ArgumentParser(description="小智Ai客户端")
+    parser = argparse.ArgumentParser(description="Ai客户端")
     parser.add_argument(
         "--mode",
         choices=["gui", "cli"],
@@ -215,7 +215,7 @@ async def start_app(mode: str, protocol: str, skip_activation: bool) -> int:
     """
     启动应用的统一入口（在已有事件循环中执行）.
     """
-    logger.info("启动小智AI客户端")
+    logger.info("启动客户端")
 
     # 内存采样诊断（默认关闭，仅当 XIAOZHI_MEM_PROFILE=1 时启用）
     from src.utils import memory_profiler
