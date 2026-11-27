@@ -34,6 +34,7 @@ nuitka_build_pyqt5_backup/
 # 日志文件
 *.log
 .cache/
+logs
 
 # 打包脚本
 build_windows.py

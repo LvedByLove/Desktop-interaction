@@ -56,8 +56,6 @@ Desktop-interaction/
 ├── scripts/                      # 开发辅助脚本（相机扫描、日历查询、目录树生成等）
 ├── installer/                    # Windows 安装包构建脚本（NSIS / Inno Setup）
 ├── requirements.txt              # Python 依赖
-├── build.json                    # Nuitka 打包配置
-├── build_nsis.bat                # 一键构建安装包（Windows）
 └── README.md
 ```
 

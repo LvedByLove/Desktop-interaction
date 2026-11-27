@@ -77,9 +77,9 @@ class ShortcutsSettingsWidget(QWidget):
         )
         shortcuts_layout.addWidget(self.shortcut_widgets["ABORT"])
 
-        # 窗口显示/隐藏
+        # 输入显示/隐藏
         self.shortcut_widgets["WINDOW_TOGGLE"] = self.create_shortcut_config(
-            "窗口显示/隐藏", self.shortcuts_config.get("WINDOW_TOGGLE", {})
+            "输入显示/隐藏", self.shortcuts_config.get("WINDOW_TOGGLE", {})
         )
         shortcuts_layout.addWidget(self.shortcut_widgets["WINDOW_TOGGLE"])
 
@@ -90,7 +90,7 @@ class ShortcutsSettingsWidget(QWidget):
         lyrics_cfg.setdefault("modifier", "alt")
         lyrics_cfg.setdefault("key", "l")
         self.shortcut_widgets["MUSIC_LYRICS_TOGGLE"] = self.create_shortcut_config(
-            "显示/收起歌词", lyrics_cfg
+            "显示/隐藏歌词", lyrics_cfg
         )
         shortcuts_layout.addWidget(
             self.shortcut_widgets["MUSIC_LYRICS_TOGGLE"]
