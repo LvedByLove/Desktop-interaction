@@ -88,3 +88,10 @@ python main.py --mode cli
 ```
 
 ---
+
+## 激活
+默认激活服务器为https://xiaozhi.me/console/agents
+官方的地址，如你有需要可以通过[xiaozhi-esp32-server
+](https://github.com/xinnan-tech/xiaozhi-esp32-server)搭建自己的服务器后端，链接方法是更改**系统配置**界面的OTA接口地址及Websocket接口地址，重新进入后端输入激活验证码。
+<img src="other_resources/image8.png" alt="xiaozhi-esp32-server
+后端"/>
