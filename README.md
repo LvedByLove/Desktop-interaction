@@ -1,4 +1,4 @@
-# <img src="assets/image/Redstone.png" alt="Redstone" width="40" height="40"> Desktop-interaction
+# <img src="assets/image/Redstone_orange.png" alt="Redstone" width="40" height="40"> Desktop-interaction
 
 > 桌面助手 | Desktop-interaction
 
