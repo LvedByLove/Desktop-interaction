@@ -194,7 +194,7 @@ def setup_logging():
 
     # 创建根日志记录器
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)  # 设置根日志级别
+    root_logger.setLevel(logging.DEBUG)  # 设置根日志级别
 
     # 清除已有的处理器（避免重复添加）
     if root_logger.handlers:
@@ -205,7 +205,7 @@ def setup_logging():
     # 控制台处理器（windowed 模式下可能为 None）
     console_handler = _make_console_handler()
     if console_handler is not None:
-        console_handler.setLevel(logging.INFO)
+        console_handler.setLevel(logging.DEBUG)
         console_handler.setFormatter(
             _ProjectFormatter(use_colors=_supports_color(console_handler.stream))
         )
@@ -224,7 +224,7 @@ def setup_logging():
                 backupCount=30,  # 保留30天的日志
                 encoding="utf-8",
             )
-            file_handler.setLevel(logging.INFO)
+            file_handler.setLevel(logging.DEBUG)
             file_handler.suffix = "%Y-%m-%d.log"  # 日志文件后缀格式
             file_handler.setFormatter(_ProjectFormatter(use_colors=False))
             handlers.append(file_handler)

@@ -20,7 +20,7 @@ class SystemConstants:
 
     # 应用信息
     APP_NAME = "Desktop interaction"
-    APP_VERSION = "2.12.20"
+    APP_VERSION = "2.17.1"
     BOARD_TYPE = "bread-compact-wifi"
 
     # 默认超时设置
