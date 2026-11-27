@@ -133,7 +133,7 @@
 
 ## 📄 许可协议
 
-本项目基于 [py-xiaozhi](https://github.com/huangjunsen0406/py-xiaozhi) 的 **MIT License** 进行二次开发。
+本项目基于 [py-xiaozhi](https://github.com/huangjunsen0406/py-xiaozhi) 的 **MIT License** 进行开发。
 
 原项目版权归原作者所有：Copyright (c) 2025 Junsen。
 
